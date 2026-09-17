@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Environment Variables & Secrets (CRITICAL)
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Production Builds & Bundles
+dist/
+build/
+.vite/
+**/.vite/
+
+# User Uploaded Media & Files (Local disk)
+backend/uploads/**
+!backend/uploads/**/
+!backend/uploads/**/.gitkeep
+
+# Database Cluster & Local Logs
+backend/data/pg_data/
+backend/data/*.log
+*.log
+npm-debug.log*
+yarn-debug.log*
+
+# OS & Editor Metadata
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
