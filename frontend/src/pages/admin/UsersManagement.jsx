@@ -975,7 +975,11 @@ const UsersManagement = () => {
                 )}
               </div>
 
-              {selectedDoc.grade8_document_data && selectedDoc.grade8_document_data.startsWith('data:image') ? (
+              {selectedDoc.grade8_document_data && (
+                selectedDoc.grade8_document_data.startsWith('data:image') ||
+                (selectedDoc.grade8_document_type || '').startsWith('image/') ||
+                /\.(png|jpe?g|webp)($|\?)/i.test(selectedDoc.grade8_document_data)
+              ) ? (
                 <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-950 p-2 flex flex-col items-center justify-center">
                   <img
                     src={selectedDoc.grade8_document_data}
@@ -994,7 +998,11 @@ const UsersManagement = () => {
                     </a>
                   </div>
                 </div>
-              ) : selectedDoc.grade8_document_data && selectedDoc.grade8_document_data.startsWith('data:application/pdf') ? (
+              ) : selectedDoc.grade8_document_data && (
+                selectedDoc.grade8_document_data.startsWith('data:application/pdf') ||
+                (selectedDoc.grade8_document_type || '').includes('pdf') ||
+                /\.pdf($|\?)/i.test(selectedDoc.grade8_document_data)
+              ) ? (
                 <div className="rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden bg-slate-900">
                   <iframe
                     src={selectedDoc.grade8_document_data}
@@ -1005,6 +1013,8 @@ const UsersManagement = () => {
                     <span className="font-semibold truncate max-w-xs">{selectedDoc.grade8_document_name || 'Official Grade 8 National Certificate.pdf'}</span>
                     <a
                       href={selectedDoc.grade8_document_data}
+                      target="_blank"
+                      rel="noreferrer"
                       download={selectedDoc.grade8_document_name || 'Grade8_Certificate.pdf'}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary-600 hover:bg-primary-700 text-white font-semibold"
                     >

@@ -241,7 +241,7 @@ const RegisterStudentPage = () => {
     setFormSuccess('');
 
     // STRICT MANDATORY VALIDATION: Grade 8 document is compulsory
-    if (!documentBase64) {
+    if (!documentFile && !documentBase64) {
       setFormError('Official Grade 8 completion document/certificate is strictly required for admission. Registration cannot proceed without attaching your official document for administrator verification.');
       return;
     }
@@ -255,22 +255,37 @@ const RegisterStudentPage = () => {
     setLoading(true);
 
     try {
-      const payload = {
-        ...formData,
-        studentId: formData.studentId.trim(),
-        email: formData.email.trim(),
-        grade8Document: documentBase64,
-        documentName: documentName || 'Grade8_Certificate.pdf',
-        documentType: documentType || 'application/pdf',
-      };
+      const formDataToSend = new FormData();
+      Object.keys(formData).forEach((key) => {
+        if (formData[key] !== null && formData[key] !== undefined) {
+          formDataToSend.append(key, String(formData[key]).trim());
+        }
+      });
 
-      const res = await registerStudent(payload);
+      if (documentFile) {
+        formDataToSend.append('file', documentFile);
+        formDataToSend.append('documentName', documentName || documentFile.name);
+        formDataToSend.append('documentType', documentType || documentFile.type);
+      } else if (documentBase64) {
+        formDataToSend.append('grade8Document', documentBase64);
+        formDataToSend.append('documentName', documentName || 'Grade8_Certificate.pdf');
+        formDataToSend.append('documentType', documentType || 'application/pdf');
+      }
+
+      const res = await registerStudent(formDataToSend);
       setFormSuccess(res.message || 'Student registration with Grade 8 document submitted successfully. Your document is currently awaiting Administrator review before class enrollment.');
       setTimeout(() => {
         navigate('/login');
       }, 3000);
     } catch (err) {
-      setFormError(err.response?.data?.message || 'Registration failed. Please check your information and try again.');
+      let msg = err.response?.data?.message || err.message;
+      if (!msg && typeof err.response?.data === 'string') {
+        msg = err.response.data;
+      }
+      if (err.response?.status === 413 || (msg && msg.toLowerCase().includes('entity too large'))) {
+        msg = 'The uploaded document exceeds the server size limit. Please upload a smaller file or compressed document (under 5MB).';
+      }
+      setFormError(msg || 'Registration failed. Please check your information and try again.');
     } finally {
       setLoading(false);
     }

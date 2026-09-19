@@ -1,9 +1,11 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const fs = require('fs');
 const { query, withTransaction } = require('../config/db');
 const { JWT_SECRET } = require('../middleware/auth');
 const { logAudit } = require('../services/auditService');
 const { verifyGrade8Prerequisite } = require('../services/eligibilityEngine');
+const cloudinaryService = require('../services/cloudinaryService');
 
 /**
  * Unified Login for Admin, Teacher, and Student
@@ -191,7 +193,7 @@ const login = async (req, res, next) => {
  */
 const registerStudent = async (req, res, next) => {
   try {
-    const {
+    let {
       firstName,
       lastName,
       email,
@@ -211,6 +213,48 @@ const registerStudent = async (req, res, next) => {
       grade8AverageScore,
       grade8TotalScore,
     } = req.body;
+
+    // Handle binary file upload from Multer (multipart/form-data)
+    if (req.file) {
+      documentName = req.file.originalname;
+      documentType = req.file.mimetype;
+      if (cloudinaryService.isConfigured()) {
+        try {
+          const fileBuffer = req.file.buffer || (req.file.path ? fs.readFileSync(req.file.path) : null);
+          if (fileBuffer) {
+            const cloudResult = await cloudinaryService.uploadBuffer(
+              fileBuffer,
+              req.file.originalname,
+              'ethio_highhub/grade8_certificates'
+            );
+            grade8Document = cloudResult.secure_url;
+          } else {
+            grade8Document = `/uploads/assignments/${req.file.filename}`;
+          }
+        } catch (cloudErr) {
+          console.warn('[Cloudinary Grade8 Upload Error] Fallback to local file:', cloudErr.message);
+          grade8Document = `/uploads/assignments/${req.file.filename}`;
+        }
+      } else {
+        grade8Document = `/uploads/assignments/${req.file.filename}`;
+      }
+    } else if (grade8Document && typeof grade8Document === 'string' && grade8Document.startsWith('data:') && cloudinaryService.isConfigured()) {
+      // Backward compatibility: upload Base64 to Cloudinary to keep DB lightweight and clean
+      try {
+        const matches = grade8Document.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+        if (matches && matches[2]) {
+          const buffer = Buffer.from(matches[2], 'base64');
+          const cloudResult = await cloudinaryService.uploadBuffer(
+            buffer,
+            documentName || 'Grade8_Certificate.pdf',
+            'ethio_highhub/grade8_certificates'
+          );
+          grade8Document = cloudResult.secure_url;
+        }
+      } catch (e) {
+        console.warn('[Cloudinary Base64 Grade8 Fallback Error]:', e.message);
+      }
+    }
 
     // Explicitly reject any attempt to register with role 'admin'
     if (req.body.role && req.body.role.toLowerCase() === 'admin') {
@@ -243,12 +287,13 @@ const registerStudent = async (req, res, next) => {
     }
 
     // MANDATORY REQUIREMENT: Student MUST submit Grade 8 official document for admin review
-    if (!grade8Document) {
+    if (!grade8Document && !req.file) {
       return res.status(400).json({
         success: false,
         message: 'Official Grade 8 completion document/certificate is strictly required for admission. Registration cannot proceed without submitting your document for administrative verification.',
       });
     }
+
 
     // 1. Check for duplicate email specifically
     const emailDup = await query('SELECT id FROM users WHERE LOWER(email) = LOWER($1)', [email.trim()]);
