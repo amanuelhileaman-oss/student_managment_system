@@ -84,14 +84,36 @@ const uploadBuffer = (buffer, options = {}) => {
       return reject(new Error('Persistent cloud storage (Cloudinary) is not configured in environment variables.'));
     }
 
-    const { folder = 'ethio_highhub/general', originalName = 'document', resourceType = 'auto' } = options;
+    let folder = 'ethio_highhub/general';
+    let originalName = 'document';
+    let resourceType = 'auto';
+
+    if (typeof options === 'string') {
+      originalName = options;
+      if (arguments.length > 2 && typeof arguments[2] === 'string') {
+        folder = arguments[2];
+      }
+      if (arguments.length > 3 && typeof arguments[3] === 'string') {
+        resourceType = arguments[3];
+      }
+    } else if (typeof options === 'object' && options !== null) {
+      folder = options.folder || folder;
+      originalName = options.originalName || options.filename || originalName;
+      resourceType = options.resourceType || resourceType;
+    }
+
     const ext = path.extname(originalName).toLowerCase();
     
-    // Cloudinary raw storage is best suited for document formats including PDF, PPTX, DOCX, XLSX
+    // For PDFs and images, 'image' resource type enables high-res thumbnail and page-1 previews (/pg_1/)
+    // For Office documents, 'raw' is best
     const effectiveResourceType =
-      resourceType === 'auto' && ['.ppt', '.pptx', '.doc', '.docx', '.xls', '.xlsx', '.epub', '.pdf', '.odt', '.ods', '.odp', '.txt', '.rtf', '.zip', '.rar', '.7z', '.csv'].includes(ext)
+      resourceType !== 'auto'
+        ? resourceType
+        : ['.ppt', '.pptx', '.doc', '.docx', '.xls', '.xlsx', '.epub', '.odt', '.ods', '.odp', '.txt', '.rtf', '.zip', '.rar', '.7z', '.csv'].includes(ext)
         ? 'raw'
-        : resourceType;
+        : ext === '.pdf'
+        ? 'image'
+        : 'auto';
 
     // Sanitize filename_override for Cloudinary: safe ASCII alphanumeric, dots, dashes, underscores
     const rawBase = path.basename(originalName, ext);
@@ -144,8 +166,8 @@ const getSignedDownloadUrl = (fileUrlOrPublicId) => {
 
   try {
     const ext = path.extname(fileUrlOrPublicId || '').replace('.', '').toLowerCase();
-    // Do not force 'pdf' for images; let Cloudinary use original format or format if image extension
-    const format = resourceType === 'image' && ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext) ? ext : '';
+    // For images and PDFs under image resource type, specify format to guarantee correct file extension
+    const format = resourceType === 'image' && ['png', 'jpg', 'jpeg', 'webp', 'gif', 'pdf'].includes(ext) ? ext : '';
     return cloudinary.utils.private_download_url(publicId, format, {
       resource_type: resourceType,
       type: 'upload',

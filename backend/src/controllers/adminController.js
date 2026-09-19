@@ -1,6 +1,7 @@
 const { query, withTransaction } = require('../config/db');
 const { logAudit } = require('../services/auditService');
 const { syncScheduleRoomNumbers } = require('./scheduleController');
+const cloudinaryService = require('../services/cloudinaryService');
 
 /**
  * Real-time Admin Dashboard Analytics from live database
@@ -912,7 +913,82 @@ const getStudentDocuments = async (req, res, next) => {
     queryText += ` ORDER BY s.document_submitted_at DESC NULLS LAST, s.id DESC`;
 
     const result = await query(queryText, params);
-    res.json({ success: true, count: result.rows.length, data: result.rows });
+
+    const rows = result.rows.map((row) => {
+      let previewUrl = null;
+      let signedUrl = null;
+
+      if (row.grade8_document_data) {
+        if (row.grade8_document_data.startsWith('data:image')) {
+          previewUrl = row.grade8_document_data;
+        } else if (row.grade8_document_data.includes('res.cloudinary.com')) {
+          signedUrl = cloudinaryService.getSignedDownloadUrl(row.grade8_document_data);
+          // For Cloudinary documents, page 1 JPG preview works universally with HTTP 200
+          if (row.grade8_document_data.includes('/image/upload/')) {
+            previewUrl = row.grade8_document_data
+              .replace('/image/upload/', '/image/upload/pg_1/')
+              .replace(/\.[^./]+$/i, '.jpg');
+          }
+        }
+      }
+
+      return {
+        ...row,
+        grade8_document_signed_url: signedUrl,
+        grade8_document_preview_url: previewUrl,
+        grade8_document_stream_url: `/api/admin/documents/${encodeURIComponent(row.student_id)}/view`,
+      };
+    });
+
+    res.json({ success: true, count: rows.length, data: rows });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Stream or download Grade 8 student document securely with administrative authorization
+ */
+const streamStudentDocument = async (req, res, next) => {
+  try {
+    const { studentId } = req.params;
+    const isDownload = req.query.download === 'true' || req.query.download === '1';
+
+    const result = await query(
+      `SELECT s.grade8_document_name, s.grade8_document_data, s.grade8_document_type
+       FROM students s
+       WHERE s.student_id = $1 OR s.id::text = $1`,
+      [studentId]
+    );
+
+    if (!result.rows.length || !result.rows[0].grade8_document_data) {
+      return res.status(404).json({ success: false, message: 'Grade 8 document not found for this student.' });
+    }
+
+    const doc = result.rows[0];
+    const docData = doc.grade8_document_data;
+    const docName = doc.grade8_document_name || 'Official_Grade8_Certificate.pdf';
+    const docType = doc.grade8_document_type || 'application/pdf';
+
+    // Base64 storage
+    if (docData.startsWith('data:')) {
+      const commaIdx = docData.indexOf(',');
+      const base64Content = commaIdx !== -1 ? docData.slice(commaIdx + 1) : docData;
+      const buffer = Buffer.from(base64Content, 'base64');
+      const disposition = isDownload ? 'attachment' : 'inline';
+      res.setHeader('Content-Type', docType);
+      res.setHeader('Content-Disposition', `${disposition}; filename="${docName.replace(/[^\w\s.-]/gi, '_')}"`);
+      return res.send(buffer);
+    }
+
+    // Cloudinary or local disk file streaming
+    return cloudinaryService.streamFileToResponse({
+      fileUrl: docData,
+      fileName: docName,
+      mimeType: docType,
+      isInline: !isDownload,
+      res,
+    });
   } catch (error) {
     next(error);
   }
@@ -1482,4 +1558,5 @@ module.exports = {
   createSubject,
   updateSubject,
   deleteSubject,
+  streamStudentDocument,
 };

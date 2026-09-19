@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../../services/api';
+import { resolveFileUrl, getBackendHost } from '../../utils/fileUrl';
 import DataTable from '../../components/common/DataTable';
 import Badge from '../../components/common/Badge';
 import Alert from '../../components/common/Alert';
@@ -963,77 +964,120 @@ const UsersManagement = () => {
                 </label>
                 {selectedDoc.grade8_document_data && (
                   <a
-                    href={selectedDoc.grade8_document_data}
+                    href={
+                      selectedDoc.grade8_document_signed_url ||
+                      (selectedDoc.grade8_document_stream_url
+                        ? `${getBackendHost()}${selectedDoc.grade8_document_stream_url}?download=true`
+                        : resolveFileUrl(selectedDoc.grade8_document_data))
+                    }
                     target="_blank"
                     rel="noreferrer"
                     download={selectedDoc.grade8_document_name || 'Grade8_Certificate.pdf'}
                     className="text-xs text-primary-600 dark:text-primary-400 hover:underline flex items-center gap-1 font-semibold"
                   >
                     <ExternalLink className="w-3.5 h-3.5" />
-                    Open / Download
+                    Open / Download Original
                   </a>
                 )}
               </div>
 
-              {selectedDoc.grade8_document_data && (
-                selectedDoc.grade8_document_data.startsWith('data:image') ||
-                (selectedDoc.grade8_document_type || '').startsWith('image/') ||
-                /\.(png|jpe?g|webp)($|\?)/i.test(selectedDoc.grade8_document_data)
-              ) ? (
-                <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-950 p-2 flex flex-col items-center justify-center">
-                  <img
-                    src={selectedDoc.grade8_document_data}
-                    alt="Grade 8 Certificate"
-                    className="max-h-72 object-contain rounded"
-                  />
-                  <div className="pt-2 text-center">
+              {(() => {
+                const docData = selectedDoc.grade8_document_data || '';
+                const docType = selectedDoc.grade8_document_type || '';
+                const docName = selectedDoc.grade8_document_name || '';
+                const isCloudinary = docData.includes('res.cloudinary.com');
+
+                // Determine preview image URL (page 1 for Cloudinary PDFs or direct image)
+                let previewImg = selectedDoc.grade8_document_preview_url || null;
+                if (!previewImg) {
+                  if (docData.startsWith('data:image') || docType.startsWith('image/') || /\.(png|jpe?g|webp)($|\?)/i.test(docData)) {
+                    previewImg = docData;
+                  } else if (isCloudinary && docData.includes('/image/upload/')) {
+                    previewImg = docData.replace('/image/upload/', '/image/upload/pg_1/').replace(/\.[^./]+$/i, '.jpg');
+                  }
+                }
+
+                // Determine full view / download URL
+                const downloadTarget =
+                  selectedDoc.grade8_document_signed_url ||
+                  (selectedDoc.grade8_document_stream_url
+                    ? `${getBackendHost()}${selectedDoc.grade8_document_stream_url}`
+                    : resolveFileUrl(docData));
+
+                if (previewImg) {
+                  return (
+                    <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-950 p-3 flex flex-col items-center justify-center">
+                      <div className="relative group max-h-80 w-full overflow-hidden flex items-center justify-center">
+                        <img
+                          src={previewImg}
+                          alt="Grade 8 Certificate"
+                          className="max-h-80 w-auto object-contain rounded shadow border border-slate-800"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none';
+                          }}
+                        />
+                      </div>
+                      <div className="pt-3 flex items-center gap-3">
+                        <a
+                          href={downloadTarget}
+                          target="_blank"
+                          rel="noreferrer"
+                          download={docName || 'Grade8_Certificate.pdf'}
+                          className="px-3.5 py-1.5 rounded-lg bg-primary-600 hover:bg-primary-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-sm transition-colors"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          View Full Official Document
+                        </a>
+                      </div>
+                    </div>
+                  );
+                }
+
+                if (docData.startsWith('data:application/pdf')) {
+                  return (
+                    <div className="rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden bg-slate-900">
+                      <iframe
+                        src={docData}
+                        title="Grade 8 Official Document"
+                        className="w-full h-72 border-0 bg-white"
+                      />
+                      <div className="p-3 bg-slate-800 flex items-center justify-between text-white text-xs">
+                        <span className="font-semibold truncate max-w-xs">{docName || 'Official Grade 8 National Certificate.pdf'}</span>
+                        <a
+                          href={docData}
+                          download={docName || 'Grade8_Certificate.pdf'}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary-600 hover:bg-primary-700 text-white font-semibold"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          Download PDF
+                        </a>
+                      </div>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="p-5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 text-center">
+                    <FileText className="w-10 h-10 text-slate-400 mx-auto mb-1.5" />
+                    <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                      {docName || 'Grade 8 Completion Document'}
+                    </p>
+                    <p className="text-[11px] text-slate-400 mt-0.5 mb-3">
+                      Official Grade 8 completion document recorded in admissions registry
+                    </p>
                     <a
-                      href={selectedDoc.grade8_document_data}
+                      href={downloadTarget}
                       target="_blank"
                       rel="noreferrer"
-                      className="text-xs text-primary-400 hover:text-primary-300 font-semibold inline-flex items-center gap-1"
+                      download={docName || 'Grade8_Certificate.pdf'}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-primary-600 hover:bg-primary-700 text-white text-xs font-semibold"
                     >
                       <ExternalLink className="w-3.5 h-3.5" />
-                      View Full Size Certificate Image
+                      Open Official Document
                     </a>
                   </div>
-                </div>
-              ) : selectedDoc.grade8_document_data && (
-                selectedDoc.grade8_document_data.startsWith('data:application/pdf') ||
-                (selectedDoc.grade8_document_type || '').includes('pdf') ||
-                /\.pdf($|\?)/i.test(selectedDoc.grade8_document_data)
-              ) ? (
-                <div className="rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden bg-slate-900">
-                  <iframe
-                    src={selectedDoc.grade8_document_data}
-                    title="Grade 8 Official Document"
-                    className="w-full h-72 border-0 bg-white"
-                  />
-                  <div className="p-3 bg-slate-800 flex items-center justify-between text-white text-xs">
-                    <span className="font-semibold truncate max-w-xs">{selectedDoc.grade8_document_name || 'Official Grade 8 National Certificate.pdf'}</span>
-                    <a
-                      href={selectedDoc.grade8_document_data}
-                      target="_blank"
-                      rel="noreferrer"
-                      download={selectedDoc.grade8_document_name || 'Grade8_Certificate.pdf'}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary-600 hover:bg-primary-700 text-white font-semibold"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                      Download PDF
-                    </a>
-                  </div>
-                </div>
-              ) : (
-                <div className="p-5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 text-center">
-                  <FileText className="w-10 h-10 text-slate-400 mx-auto mb-1.5" />
-                  <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">
-                    {selectedDoc.grade8_document_name || 'Grade 8 Completion Document'}
-                  </p>
-                  <p className="text-[11px] text-slate-400 mt-0.5">
-                    Official Grade 8 completion document recorded in admissions registry
-                  </p>
-                </div>
-              )}
+                );
+              })()}
             </div>
 
             <div>

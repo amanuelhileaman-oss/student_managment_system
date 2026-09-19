@@ -31,6 +31,8 @@ router.delete('/subjects/:id', adminController.deleteSubject);
 
 router.patch('/stream-criteria/:criteriaId', adminController.updateStreamCriteria);
 router.get('/documents', adminController.getStudentDocuments);
+router.get('/documents/:studentId/view', adminController.streamStudentDocument);
+router.get('/documents/:studentId/download', adminController.streamStudentDocument);
 router.post('/documents/:studentId/review', adminController.reviewStudentDocument);
 router.get('/prerequisites', adminController.getPrerequisites);
 router.post('/prerequisites', adminController.createPrerequisite);
