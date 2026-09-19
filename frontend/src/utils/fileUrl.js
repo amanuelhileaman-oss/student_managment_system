@@ -13,7 +13,7 @@ export const getBackendHost = () => {
     return 'http://localhost:5000';
   }
   // Production Render backend
-  return 'https://stu-ma.onrender.com';
+  return 'https://stu-ma-gx4v.onrender.com';
 };
 
 /**
