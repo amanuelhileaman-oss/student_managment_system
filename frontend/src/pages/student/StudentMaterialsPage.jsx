@@ -104,11 +104,8 @@ const StudentMaterialsPage = () => {
         // Non-blocking tracking
       }
 
-      // If mat.file_url is already a full external URL (e.g. Cloudinary), use it directly;
-      // otherwise use authenticated backend download endpoint
-      const target = (mat.file_url && mat.file_url.startsWith('http'))
-        ? mat.file_url
-        : `/students/materials/${mat.id}/download`;
+      // Always route through authenticated backend download endpoint to guarantee signed Cloudinary streaming
+      const target = `/students/materials/${mat.id}/download`;
 
       await triggerFileDownload(target, mat.file_name || `${mat.title || 'study-material'}.pdf`, (percent) => {
         setDownloadProgress((prev) => ({ ...prev, [mat.id]: percent }));
@@ -140,12 +137,9 @@ const StudentMaterialsPage = () => {
         return await handleDownload(mat);
       }
 
-      const viewEndpoint = (mat.file_url && mat.file_url.startsWith('http'))
-        ? mat.file_url
-        : `/students/materials/${mat.id}/view`;
-      const downloadEndpoint = (mat.file_url && mat.file_url.startsWith('http'))
-        ? mat.file_url
-        : `/students/materials/${mat.id}/download`;
+      // Route through backend view and download endpoints
+      const viewEndpoint = `/students/materials/${mat.id}/view`;
+      const downloadEndpoint = `/students/materials/${mat.id}/download`;
 
       await triggerFilePreview(viewEndpoint, downloadEndpoint, mat.file_name || 'document.pdf');
     } catch (err) {
