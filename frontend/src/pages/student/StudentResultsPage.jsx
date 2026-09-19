@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 import Badge from '../../components/common/Badge';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
@@ -61,12 +61,12 @@ const StudentResultsPage = () => {
   const rawGrades = activeReport.grades || [];
 
   // Defensive normalization: if backend returned un-aggregated legacy rows during deploy rollout
-  const grades = useMemo(() => {
-    const hasUnaggregated = rawGrades.some((g) => !g.sem1 && !g.sem2 && g.total_score != null);
-    if (!hasUnaggregated) return rawGrades;
+  const normalizeGrades = (list) => {
+    const hasUnaggregated = list.some((g) => !g.sem1 && !g.sem2 && g.total_score != null);
+    if (!hasUnaggregated) return list;
 
     const subjectMap = {};
-    rawGrades.forEach((g) => {
+    list.forEach((g) => {
       const key = g.subject_id || g.subject_code || g.subject_name;
       if (!subjectMap[key]) {
         subjectMap[key] = {
@@ -122,7 +122,9 @@ const StudentResultsPage = () => {
         is_passed: annualTotal !== null && annualTotal >= 50.0,
       };
     });
-  }, [rawGrades]);
+  };
+
+  const grades = normalizeGrades(rawGrades);
 
   const sem1Scores = grades.filter((g) => g.sem1?.total_score != null).map((g) => g.sem1.total_score);
   const sem2Scores = grades.filter((g) => g.sem2?.total_score != null).map((g) => g.sem2.total_score);
