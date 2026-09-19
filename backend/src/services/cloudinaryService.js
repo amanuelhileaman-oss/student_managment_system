@@ -1,5 +1,10 @@
 require('dotenv').config();
-const cloudinary = require('cloudinary').v2;
+let cloudinary = null;
+try {
+  cloudinary = require('cloudinary').v2;
+} catch (err) {
+  console.warn('[Cloudinary] Warning: cloudinary module not available. Fallback to local storage.');
+}
 const { Readable } = require('stream');
 const path = require('path');
 const fs = require('fs');
@@ -13,13 +18,13 @@ const API_SECRET = process.env.CLOUDINARY_API_SECRET || 'VlnMILCFQu6KhVqSZzgW_DK
  */
 const isConfigured = () => {
   return !!(
-    process.env.CLOUDINARY_URL ||
-    (CLOUD_NAME && API_KEY && API_SECRET)
+    cloudinary &&
+    (process.env.CLOUDINARY_URL || (CLOUD_NAME && API_KEY && API_SECRET))
   );
 };
 
 const ensureConfig = () => {
-  if (isConfigured()) {
+  if (cloudinary && isConfigured()) {
     if (process.env.CLOUDINARY_URL) {
       cloudinary.config({
         cloudinary_url: process.env.CLOUDINARY_URL,
