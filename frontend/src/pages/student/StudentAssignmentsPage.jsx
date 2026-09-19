@@ -192,16 +192,16 @@ const StudentAssignmentsPage = () => {
 
       await fetchAssignments();
 
-      // Automatically return to student dashboard after 1.5 seconds
+      // Automatically close modal after 1.5 seconds
       setTimeout(() => {
         setIsSubmitModalOpen(false);
         setSelectedAssignForSubmit(null);
         setSubmissionContent('');
         setSelectedFile(null);
+        if (fileInputRef.current) fileInputRef.current.value = '';
         setInputGroupCode('');
         setUploadProgress(0);
         setModalSuccess('');
-        navigate('/student');
       }, 1500);
     } catch (err) {
       const msg = err.response?.data?.message || err.message || 'Failed to submit assignment. Please try again.';
