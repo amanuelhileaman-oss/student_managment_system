@@ -957,7 +957,7 @@ const streamStudentDocument = async (req, res, next) => {
     const result = await query(
       `SELECT s.grade8_document_name, s.grade8_document_data, s.grade8_document_type
        FROM students s
-       WHERE s.student_id = $1 OR s.id::text = $1`,
+       WHERE LOWER(TRIM(s.student_id)) = LOWER(TRIM($1)) OR s.id::text = $1 OR s.user_id::text = $1`,
       [studentId]
     );
 
