@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
+import { triggerFileDownload, triggerFilePreview, resolveFileUrl } from '../../utils/fileUrl';
 import Badge from '../../components/common/Badge';
 import Alert from '../../components/common/Alert';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
@@ -48,6 +49,8 @@ const StudentMaterialsPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [downloadingId, setDownloadingId] = useState(null);
+  const [viewingId, setViewingId] = useState(null);
+  const [downloadProgress, setDownloadProgress] = useState({});
 
   // Filters & Search
   const [selectedCategory, setSelectedCategory] = useState('ALL');
@@ -84,30 +87,72 @@ const StudentMaterialsPage = () => {
     fetchMaterials();
   }, []);
 
-  // Handle Download action
+  // Handle Download action via authenticated binary stream
   const handleDownload = async (mat) => {
     try {
       setDownloadingId(mat.id);
+      setDownloadProgress((prev) => ({ ...prev, [mat.id]: 0 }));
+      setError('');
+
       // Track download on server
-      await api.post(`/students/materials/${mat.id}/download`);
+      try {
+        await api.post(`/students/materials/${mat.id}/download`);
+        setMaterials((prev) =>
+          prev.map((m) => (m.id === mat.id ? { ...m, download_count: (m.download_count || 0) + 1 } : m))
+        );
+      } catch {
+        // Non-blocking tracking
+      }
 
-      // Update local download count
-      setMaterials((prev) =>
-        prev.map((m) => (m.id === mat.id ? { ...m, download_count: (m.download_count || 0) + 1 } : m))
-      );
+      // If mat.file_url is already a full external URL (e.g. Cloudinary), use it directly;
+      // otherwise use authenticated backend download endpoint
+      const target = (mat.file_url && mat.file_url.startsWith('http'))
+        ? mat.file_url
+        : `/students/materials/${mat.id}/download`;
 
-      // Trigger file download
-      const link = document.createElement('a');
-      link.href = mat.file_url;
-      link.setAttribute('download', mat.file_name);
-      link.setAttribute('target', '_blank');
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      await triggerFileDownload(target, mat.file_name || `${mat.title || 'study-material'}.pdf`, (percent) => {
+        setDownloadProgress((prev) => ({ ...prev, [mat.id]: percent }));
+      });
     } catch (err) {
       console.error('Download error:', err);
+      setError(err.message || 'Failed to download document.');
     } finally {
       setDownloadingId(null);
+      setTimeout(() => {
+        setDownloadProgress((prev) => {
+          const next = { ...prev };
+          delete next[mat.id];
+          return next;
+        });
+      }, 1500);
+    }
+  };
+
+  // Handle View / Read Online action
+  const handleView = async (mat) => {
+    try {
+      setViewingId(mat.id);
+      setError('');
+      const ext = (mat.file_name || '').split('.').pop().toLowerCase();
+      const isPdf = ext === 'pdf' || mat.file_type === 'application/pdf';
+
+      if (!isPdf) {
+        return await handleDownload(mat);
+      }
+
+      const viewEndpoint = (mat.file_url && mat.file_url.startsWith('http'))
+        ? mat.file_url
+        : `/students/materials/${mat.id}/view`;
+      const downloadEndpoint = (mat.file_url && mat.file_url.startsWith('http'))
+        ? mat.file_url
+        : `/students/materials/${mat.id}/download`;
+
+      await triggerFilePreview(viewEndpoint, downloadEndpoint, mat.file_name || 'document.pdf');
+    } catch (err) {
+      console.error('View error:', err);
+      setError(err.message || 'Could not open document for online viewing.');
+    } finally {
+      setViewingId(null);
     }
   };
 
@@ -421,24 +466,31 @@ const StudentMaterialsPage = () => {
                 {/* Card Bottom Actions */}
                 <div className="p-3 bg-slate-50 dark:bg-slate-900/50 border-t border-slate-100 dark:border-slate-700/80 flex items-center justify-between gap-2">
                   {/* Read / Preview in browser */}
-                  <a
-                    href={mat.file_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-bold text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-900/30 hover:bg-teal-100 dark:hover:bg-teal-900/50 rounded-xl transition-colors"
+                  <button
+                    type="button"
+                    onClick={() => handleView(mat)}
+                    disabled={viewingId === mat.id}
+                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-bold text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-900/30 hover:bg-teal-100 dark:hover:bg-teal-900/50 rounded-xl transition-colors disabled:opacity-50"
                   >
                     <Eye className="w-3.5 h-3.5" />
-                    <span>{isPdf ? 'Read Online' : 'View File'}</span>
-                  </a>
+                    <span>{viewingId === mat.id ? 'Opening...' : isPdf ? 'Read Online' : 'View File'}</span>
+                  </button>
 
                   {/* Download button */}
                   <button
+                    type="button"
                     onClick={() => handleDownload(mat)}
                     disabled={downloadingId === mat.id}
-                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-bold text-white bg-teal-600 hover:bg-teal-700 rounded-xl shadow-sm transition-all"
+                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-bold text-white bg-teal-600 hover:bg-teal-700 rounded-xl shadow-sm transition-all disabled:opacity-50"
                   >
                     <Download className="w-3.5 h-3.5" />
-                    <span>{downloadingId === mat.id ? 'Downloading...' : 'Download'}</span>
+                    <span>
+                      {downloadingId === mat.id
+                        ? downloadProgress[mat.id]
+                          ? `${downloadProgress[mat.id]}%`
+                          : 'Downloading...'
+                        : 'Download'}
+                    </span>
                   </button>
                 </div>
               </div>

@@ -2,6 +2,8 @@ const path = require('path');
 const fs = require('fs');
 const { query } = require('../config/db');
 const { logAudit } = require('../services/auditService');
+const cloudinaryService = require('../services/cloudinaryService');
+const { streamFileToResponse, getMimeType } = require('../services/cloudinaryService');
 
 /**
  * Helper to get teacher record by user ID
@@ -179,10 +181,29 @@ const uploadMaterial = async (req, res, next) => {
       parsedSection = parseInt(sectionId, 10);
     }
 
-    const fileUrl = `/uploads/materials/${req.file.filename}`;
-    const fileName = req.file.originalname;
-    const fileSize = req.file.size;
-    const fileType = req.file.mimetype;
+    let fileUrl = `/uploads/materials/${req.file.filename}`;
+    let fileName = req.file.originalname;
+    let fileSize = req.file.size;
+    let fileType = req.file.mimetype;
+
+    if (req.file && cloudinaryService.isConfigured()) {
+      try {
+        const fileBuffer = req.file.buffer || (req.file.path && fs.existsSync(req.file.path) ? fs.readFileSync(req.file.path) : null);
+        if (fileBuffer) {
+          const cloudResult = await cloudinaryService.uploadBuffer(fileBuffer, {
+            folder: 'ethio_highhub/materials',
+            originalName: fileName,
+            resourceType: 'auto',
+          });
+          if (cloudResult && cloudResult.secure_url) {
+            fileUrl = cloudResult.secure_url;
+            fileSize = cloudResult.bytes || fileSize;
+          }
+        }
+      } catch (cloudErr) {
+        console.warn('[Storage] Cloudinary material upload fallback to local disk:', cloudErr.message);
+      }
+    }
 
     const insertRes = await query(
       `INSERT INTO study_materials
@@ -523,15 +544,40 @@ const downloadMaterialFile = async (req, res, next) => {
     // Increment download counter
     await query('UPDATE study_materials SET download_count = download_count + 1 WHERE id = $1', [materialId]);
 
-    const diskFileName = path.basename(material.file_url);
-    const filePath = path.join(__dirname, '../../uploads/materials', diskFileName);
+    await streamFileToResponse({
+      fileUrl: material.file_url,
+      fileName: material.file_name || 'study-material',
+      mimeType: material.file_type || getMimeType(material.file_name),
+      isInline: false,
+      res,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
 
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ success: false, message: 'The requested file was not found on the server.' });
+/**
+ * Direct file inline preview handler (e.g. for PDFs and images)
+ */
+const viewMaterialFile = async (req, res, next) => {
+  try {
+    const materialId = parseInt(req.params.id, 10);
+    const matRes = await query('SELECT * FROM study_materials WHERE id = $1', [materialId]);
+    if (matRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Material not found.' });
     }
 
-    // Send file with clean original name
-    res.download(filePath, material.file_name);
+    const material = matRes.rows[0];
+    const ext = path.extname(material.file_name || '').toLowerCase();
+    const isOffice = ['.docx', '.doc', '.pptx', '.ppt', '.xlsx', '.xls', '.zip', '.rar'].includes(ext);
+
+    await streamFileToResponse({
+      fileUrl: material.file_url,
+      fileName: material.file_name || 'study-material',
+      mimeType: material.file_type || getMimeType(material.file_name),
+      isInline: !isOffice,
+      res,
+    });
   } catch (error) {
     next(error);
   }
@@ -546,4 +592,5 @@ module.exports = {
   getStudentMaterials,
   trackDownload,
   downloadMaterialFile,
+  viewMaterialFile,
 };

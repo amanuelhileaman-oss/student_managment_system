@@ -24,6 +24,9 @@ router.get('/materials', materialController.getTeacherMaterials);
 router.post('/materials', materialUpload.single('file'), materialController.uploadMaterial);
 router.put('/materials/:id', materialController.updateMaterial);
 router.delete('/materials/:id', materialController.deleteMaterial);
+router.get('/materials/:id/download', materialController.downloadMaterialFile);
+router.get('/materials/:id/view', materialController.viewMaterialFile);
+router.get('/materials/:id/file', materialController.downloadMaterialFile);
 
 router.get('/classes', teacherController.getAssignedClasses);
 router.get('/classes/:sectionId/students', teacherController.getClassStudents);

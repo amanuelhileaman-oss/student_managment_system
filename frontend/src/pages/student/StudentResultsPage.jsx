@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import api from '../../services/api';
 import Badge from '../../components/common/Badge';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
@@ -58,7 +58,82 @@ const StudentResultsPage = () => {
     grades: [],
   };
 
-  const grades = activeReport.grades || [];
+  const rawGrades = activeReport.grades || [];
+
+  // Defensive normalization: if backend returned un-aggregated legacy rows during deploy rollout
+  const grades = useMemo(() => {
+    const hasUnaggregated = rawGrades.some((g) => !g.sem1 && !g.sem2 && g.total_score != null);
+    if (!hasUnaggregated) return rawGrades;
+
+    const subjectMap = {};
+    rawGrades.forEach((g) => {
+      const key = g.subject_id || g.subject_code || g.subject_name;
+      if (!subjectMap[key]) {
+        subjectMap[key] = {
+          id: g.id,
+          subject_id: g.subject_id,
+          subject_name: g.subject_name,
+          subject_code: g.subject_code,
+          credit_hours: g.credit_hours,
+          teacher_name: g.teacher_name,
+          section_name: g.section_name,
+          grade_level: g.grade_level,
+          sem1: null,
+          sem2: null,
+          annual_total: null,
+          annual_letter: null,
+          is_passed: false,
+          remarks: g.remarks,
+        };
+      }
+      const sem = g.semester || (g.remarks?.includes('S2') || g.remarks?.toLowerCase().includes('sem 2') || g.remarks?.toLowerCase().includes('semester 2') ? 2 : 1);
+      const semRecord = {
+        id: g.id,
+        quiz_score: g.quiz_score !== null ? parseFloat(g.quiz_score) : null,
+        midterm_score: g.midterm_score !== null ? parseFloat(g.midterm_score) : null,
+        assignment_score: g.assignment_score !== null ? parseFloat(g.assignment_score) : null,
+        final_score: g.final_score !== null ? parseFloat(g.final_score) : null,
+        total_score: g.total_score !== null ? parseFloat(g.total_score) : null,
+        letter_grade: g.letter_grade,
+        remarks: g.remarks,
+        updated_at: g.updated_at,
+        teacher_name: g.teacher_name,
+      };
+      if (sem === 1) subjectMap[key].sem1 = semRecord;
+      if (sem === 2) subjectMap[key].sem2 = semRecord;
+    });
+
+    return Object.values(subjectMap).map((sub) => {
+      const s1 = sub.sem1?.total_score != null ? sub.sem1.total_score : null;
+      const s2 = sub.sem2?.total_score != null ? sub.sem2.total_score : null;
+      let annualTotal = null;
+      if (s1 !== null && s2 !== null) {
+        annualTotal = parseFloat(((s1 + s2) / 2).toFixed(2));
+      } else if (s1 !== null) {
+        annualTotal = s1;
+      } else if (s2 !== null) {
+        annualTotal = s2;
+      }
+      const annualLetter = annualTotal !== null ? (annualTotal >= 90 ? 'A+' : annualTotal >= 85 ? 'A' : annualTotal >= 80 ? 'A-' : annualTotal >= 75 ? 'B+' : annualTotal >= 70 ? 'B' : annualTotal >= 65 ? 'B-' : annualTotal >= 60 ? 'C+' : annualTotal >= 50 ? 'C' : 'F') : '—';
+      return {
+        ...sub,
+        annual_total: annualTotal,
+        annual_letter: annualLetter,
+        is_passed: annualTotal !== null && annualTotal >= 50.0,
+      };
+    });
+  }, [rawGrades]);
+
+  const sem1Scores = grades.filter((g) => g.sem1?.total_score != null).map((g) => g.sem1.total_score);
+  const sem2Scores = grades.filter((g) => g.sem2?.total_score != null).map((g) => g.sem2.total_score);
+  const displaySem1Avg = activeReport.sem1Average != null ? activeReport.sem1Average : (sem1Scores.length > 0 ? parseFloat((sem1Scores.reduce((a, b) => a + b, 0) / sem1Scores.length).toFixed(1)) : null);
+  const displaySem2Avg = activeReport.sem2Average != null ? activeReport.sem2Average : (sem2Scores.length > 0 ? parseFloat((sem2Scores.reduce((a, b) => a + b, 0) / sem2Scores.length).toFixed(1)) : null);
+  const displayFormula = (activeReport.sem1Average != null && activeReport.sem2Average != null)
+    ? activeReport.formula
+    : (displaySem1Avg != null && displaySem2Avg != null)
+    ? `(Semester 1 Average: ${displaySem1Avg}% + Semester 2 Average: ${displaySem2Avg}%) ÷ 2 = ${activeReport.averageScore || ((displaySem1Avg + displaySem2Avg) / 2).toFixed(1)}%`
+    : activeReport.formula;
+  const displaySubjectCount = grades.length;
 
   return (
     <div className="max-w-4xl space-y-6">
@@ -143,13 +218,13 @@ const StudentResultsPage = () => {
           <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
             <span className="text-slate-500 dark:text-slate-400 block mb-0.5 font-medium">🍂 Sem 1 Average</span>
             <span className="font-bold text-base text-slate-900 dark:text-slate-100">
-              {activeReport.sem1Average != null ? `${activeReport.sem1Average}%` : 'Pending'}
+              {displaySem1Avg != null ? `${displaySem1Avg}%` : 'Pending'}
             </span>
           </div>
           <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
             <span className="text-slate-500 dark:text-slate-400 block mb-0.5 font-medium">🌸 Sem 2 Average</span>
             <span className="font-bold text-base text-slate-900 dark:text-slate-100">
-              {activeReport.sem2Average != null ? `${activeReport.sem2Average}%` : 'Pending'}
+              {displaySem2Avg != null ? `${displaySem2Avg}%` : 'Pending'}
             </span>
           </div>
           <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800">
@@ -171,14 +246,14 @@ const StudentResultsPage = () => {
             </span>
           </div>
           <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 font-mono text-xs text-slate-800 dark:text-slate-200 overflow-x-auto">
-            {activeReport.formula}
+            {displayFormula}
           </div>
         </div>
 
         {/* Promotion Status Banner */}
         <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
           <span className="text-slate-500">
-            Evaluated Subjects: <strong>{activeReport.subjectCount}</strong>
+            Evaluated Subjects: <strong>{displaySubjectCount}</strong>
             {activeReport.failedCount > 0 && (
               <span className="ml-2 text-rose-600 dark:text-rose-400">
                 (Failed Subjects: {activeReport.failedCount})

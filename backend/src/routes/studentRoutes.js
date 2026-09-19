@@ -17,6 +17,8 @@ router.get('/attendance', attendanceController.getMyStudentAttendance);
 // Learning Materials & Digital Library
 router.get('/materials', materialController.getStudentMaterials);
 router.post('/materials/:id/download', materialController.trackDownload);
+router.get('/materials/:id/download', materialController.downloadMaterialFile);
+router.get('/materials/:id/view', materialController.viewMaterialFile);
 router.get('/materials/:id/file', materialController.downloadMaterialFile);
 
 router.get('/prerequisite-status', studentController.getPrerequisiteStatus);
