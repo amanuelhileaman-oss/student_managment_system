@@ -5,7 +5,7 @@ const getApiBaseUrl = () => {
     return import.meta.env.VITE_API_URL;
   }
   if (typeof window !== 'undefined' && window.location.hostname !== 'localhost') {
-    return 'https://stu-ma-gx4v.onrender.com/api';
+    return 'https://students-manegment.onrender.com/api';
   }
   return '/api';
 };
