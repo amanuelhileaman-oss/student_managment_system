@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import api from '../../services/api';
 import Modal from '../../components/common/Modal';
 import Badge from '../../components/common/Badge';
@@ -75,6 +75,7 @@ const AssignmentsPage = () => {
     instructions: '',
   });
   const [assignmentFile, setAssignmentFile] = useState(null);
+  const fileInputRef = useRef(null);
 
   const [formError, setFormError] = useState('');
 
@@ -619,31 +620,37 @@ const AssignmentsPage = () => {
               <span className="text-[10px] text-slate-400 font-normal">PDF, Word, PPT, Worksheets up to 25MB</span>
             </label>
 
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.rtf,.odt,.ods,.odp,.zip,.rar,.7z,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain,image/*"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) {
+                  if (f.size > 25 * 1024 * 1024) {
+                    setFormError('File size exceeds maximum allowed limit of 25MB.');
+                    return;
+                  }
+                  setAssignmentFile(f);
+                  setFormError('');
+                }
+              }}
+            />
+
             {!assignmentFile ? (
-              <label className="border-2 border-dashed border-slate-200 dark:border-slate-700 hover:border-emerald-400 dark:hover:border-emerald-500 rounded-xl p-4 flex flex-col items-center justify-center gap-1.5 cursor-pointer bg-slate-50/50 dark:bg-slate-800/40 hover:bg-emerald-50/20 transition-all text-center group">
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                className="border-2 border-dashed border-slate-200 dark:border-slate-700 hover:border-emerald-400 dark:hover:border-emerald-500 rounded-xl p-4 flex flex-col items-center justify-center gap-1.5 cursor-pointer bg-slate-50/50 dark:bg-slate-800/40 hover:bg-emerald-50/20 transition-all text-center group select-none"
+              >
                 <Paperclip className="w-5 h-5 text-slate-400 group-hover:text-emerald-500 transition-colors" />
                 <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
                   Click to select or drag & drop question document
                 </span>
                 <span className="text-[11px] text-slate-400">
-                  Supports .pdf, .docx, .doc, .ppt, .pptx, .xlsx, .txt, .zip
+                  Supports Word (.docx, .doc), PDF (.pdf), PowerPoint, Excel, and documents up to 25MB
                 </span>
-                <input
-                  type="file"
-                  className="hidden"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) {
-                      if (f.size > 25 * 1024 * 1024) {
-                        setFormError('File size exceeds maximum allowed limit of 25MB.');
-                        return;
-                      }
-                      setAssignmentFile(f);
-                      setFormError('');
-                    }
-                  }}
-                />
-              </label>
+              </div>
             ) : (
               <div className="flex items-center justify-between p-3 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800">
                 <div className="flex items-center gap-2.5 min-w-0">
@@ -659,14 +666,26 @@ const AssignmentsPage = () => {
                     </p>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setAssignmentFile(null)}
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
-                  title="Remove attached file"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="px-2.5 py-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-300 bg-white dark:bg-slate-800 hover:bg-emerald-100 rounded-lg transition-colors border border-emerald-200 dark:border-emerald-700"
+                  >
+                    Change
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAssignmentFile(null);
+                      if (fileInputRef.current) fileInputRef.current.value = '';
+                    }}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                    title="Remove attached file"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
             )}
           </div>

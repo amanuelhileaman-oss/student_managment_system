@@ -137,16 +137,21 @@ const RegisterStudentPage = () => {
       return;
     }
 
-    const validTypes = ['application/pdf', 'image/png', 'image/jpeg', 'image/webp'];
-    if (!validTypes.includes(file.type)) {
+    const ext = (file.name || '').toLowerCase().split('.').pop();
+    const isPdf = file.type === 'application/pdf' || ext === 'pdf';
+    const isImage = file.type?.startsWith('image/') || ['png', 'jpg', 'jpeg', 'webp'].includes(ext);
+
+    if (!isPdf && !isImage) {
       setFormError('Invalid file format. Please upload an official document in PDF, PNG, JPG, or WEBP format.');
       return;
     }
 
+    const resolvedType = file.type || (isPdf ? 'application/pdf' : `image/${ext || 'jpeg'}`);
+
     setFormError('');
     setDocumentFile(file);
     setDocumentName(file.name);
-    setDocumentType(file.type);
+    setDocumentType(resolvedType);
     setDocumentSize((file.size / 1024).toFixed(1) + ' KB');
 
     const reader = new FileReader();
@@ -188,6 +193,8 @@ const RegisterStudentPage = () => {
     setDocumentName('');
     setDocumentType('');
     setDocumentSize('');
+    const inputEl = document.getElementById('grade8-doc-input');
+    if (inputEl) inputEl.value = '';
   };
 
   const handleVerifyPrereq = async () => {
@@ -440,7 +447,7 @@ const RegisterStudentPage = () => {
                   <input
                     id="grade8-doc-input"
                     type="file"
-                    accept=".pdf,image/png,image/jpeg,image/webp"
+                    accept=".pdf,.png,.jpg,.jpeg,.webp,image/*,application/pdf"
                     className="hidden"
                     onChange={handleFileChange}
                   />

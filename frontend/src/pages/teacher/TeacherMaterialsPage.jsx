@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import api from '../../services/api';
+import { resolveFileUrl, triggerFileDownload, triggerFilePreview, getViewFileUrl } from '../../utils/fileUrl';
 import Modal from '../../components/common/Modal';
 import Badge from '../../components/common/Badge';
 import Alert from '../../components/common/Alert';
@@ -72,8 +73,15 @@ const TeacherMaterialsPage = () => {
     description: '',
   });
   const [selectedFile, setSelectedFile] = useState(null);
+  const fileInputRef = useRef(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadFormError, setUploadFormError] = useState('');
+
+  // Download Progress State
+  const [downloadProgress, setDownloadProgress] = useState({});
+  const [downloadingId, setDownloadingId] = useState(null);
+  const [viewingId, setViewingId] = useState(null);
 
   // Edit Form State
   const [editForm, setEditForm] = useState({
@@ -144,11 +152,12 @@ const TeacherMaterialsPage = () => {
 
   // Handle File Selection
   const handleFileChange = (e) => {
-    const file = e.target.files[0];
+    const file = e.target.files?.[0];
     if (file) {
       if (file.size > 50 * 1024 * 1024) {
         setUploadFormError('File size exceeds the maximum limit of 50 MB.');
         setSelectedFile(null);
+        if (fileInputRef.current) fileInputRef.current.value = '';
         return;
       }
       setSelectedFile(file);
@@ -179,6 +188,7 @@ const TeacherMaterialsPage = () => {
 
     try {
       setIsUploading(true);
+      setUploadProgress(0);
       setUploadFormError('');
 
       const formData = new FormData();
@@ -210,11 +220,19 @@ const TeacherMaterialsPage = () => {
 
       const res = await api.post('/teachers/materials', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (progressEvent) => {
+          if (progressEvent.total) {
+            const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            setUploadProgress(percent);
+          }
+        },
       });
 
       setSuccessMsg(res.data.message || 'Material uploaded successfully!');
       setIsUploadModalOpen(false);
       setSelectedFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      setUploadProgress(0);
       setUploadForm({
         title: '',
         author: '',
@@ -233,6 +251,52 @@ const TeacherMaterialsPage = () => {
       setUploadFormError(err.response?.data?.message || 'Failed to upload material.');
     } finally {
       setIsUploading(false);
+    }
+  };
+
+  // Handle Teacher View / Read Online action
+  const handleTeacherView = async (mat) => {
+    try {
+      setViewingId(mat.id);
+      setError('');
+      const isPdf = mat.file_name?.toLowerCase().endsWith('.pdf') || mat.mime_type === 'application/pdf';
+      if (!isPdf) {
+        return await handleTeacherDownload(mat);
+      }
+      await triggerFilePreview(
+        `/teachers/materials/${mat.id}/view`,
+        `/teachers/materials/${mat.id}/download`,
+        mat.file_name
+      );
+    } catch (err) {
+      console.error('Teacher view error:', err);
+      setError(err.message || 'Could not open document for online viewing.');
+    } finally {
+      setViewingId(null);
+    }
+  };
+
+  // Handle Teacher Download with live progress
+  const handleTeacherDownload = async (mat) => {
+    try {
+      setDownloadingId(mat.id);
+      setDownloadProgress((prev) => ({ ...prev, [mat.id]: 0 }));
+      const target = `/teachers/materials/${mat.id}/download`;
+
+      await triggerFileDownload(target, mat.file_name, (percent) => {
+        setDownloadProgress((prev) => ({ ...prev, [mat.id]: percent }));
+      });
+    } catch (err) {
+      setError(err.message || 'Failed to download file.');
+    } finally {
+      setDownloadingId(null);
+      setTimeout(() => {
+        setDownloadProgress((prev) => {
+          const next = { ...prev };
+          delete next[mat.id];
+          return next;
+        });
+      }, 1500);
     }
   };
 
@@ -574,27 +638,44 @@ const TeacherMaterialsPage = () => {
                 <div className="p-3 bg-slate-50 dark:bg-slate-900/50 border-t border-slate-100 dark:border-slate-700/80 flex items-center justify-between gap-2">
                   <div className="flex items-center gap-1.5">
                     {/* View / Open in new tab */}
-                    <a
-                      href={mat.file_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50 rounded-lg transition-colors"
-                      title="Open file in browser"
+                    <button
+                      type="button"
+                      onClick={() => handleTeacherView(mat)}
+                      disabled={viewingId === mat.id || downloadingId === mat.id}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50 rounded-lg transition-colors disabled:opacity-50"
+                      title={isPdf ? 'Read PDF in browser' : 'Download and open document'}
                     >
                       <Eye className="w-3.5 h-3.5" />
-                      <span>{isPdf ? 'Read PDF' : 'View'}</span>
-                    </a>
+                      <span>{viewingId === mat.id ? 'Opening...' : isPdf ? 'Read PDF' : 'View'}</span>
+                    </button>
 
                     {/* Download */}
-                    <a
-                      href={mat.file_url}
-                      download={mat.file_name}
-                      className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors"
-                      title="Download to computer"
+                    <button
+                      type="button"
+                      onClick={() => handleTeacherDownload(mat)}
+                      disabled={downloadingId === mat.id}
+                      className={`relative overflow-hidden inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors ${
+                        downloadingId === mat.id
+                          ? 'bg-blue-50 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 border-blue-300 dark:border-blue-700 cursor-wait'
+                          : 'text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 border-slate-200 dark:border-slate-700'
+                      }`}
+                      title="Download to device"
                     >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>Download</span>
-                    </a>
+                      {downloadingId === mat.id && downloadProgress[mat.id] !== undefined && (
+                        <div
+                          className="absolute inset-0 bg-blue-500/20 transition-all duration-150"
+                          style={{ width: `${downloadProgress[mat.id]}%` }}
+                        />
+                      )}
+                      <span className="relative z-10 flex items-center gap-1">
+                        <Download className={`w-3.5 h-3.5 ${downloadingId === mat.id ? 'animate-bounce' : ''}`} />
+                        <span>
+                          {downloadingId === mat.id
+                            ? (downloadProgress[mat.id] !== undefined ? `${downloadProgress[mat.id]}%` : 'Downloading...')
+                            : 'Download'}
+                        </span>
+                      </span>
+                    </button>
                   </div>
 
                   <div className="flex items-center gap-1">
@@ -795,36 +876,92 @@ const TeacherMaterialsPage = () => {
             <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
               File Attachment * (PDF, Word, PPT, EPUB, Zip up to 50MB)
             </label>
-            <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-xl hover:border-blue-500 transition-colors bg-slate-50/50 dark:bg-slate-900/30">
-              <div className="space-y-1 text-center">
-                <UploadCloud className="mx-auto h-10 w-10 text-slate-400" />
-                <div className="flex text-sm text-slate-600 dark:text-slate-400">
-                  <label className="relative cursor-pointer bg-transparent rounded-md font-semibold text-blue-600 dark:text-blue-400 hover:text-blue-500 focus-within:outline-none">
-                    <span>Choose a file from your computer</span>
-                    <input
-                      type="file"
-                      required
-                      onChange={handleFileChange}
-                      accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.rtf,.epub,.zip,.rar"
-                      className="sr-only"
-                    />
-                  </label>
-                </div>
-                <p className="text-xs text-slate-500">
-                  Supports digital textbooks, scanned books, slide decks, worksheets
-                </p>
-                {selectedFile && (
-                  <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 text-xs font-semibold border border-emerald-200 dark:border-emerald-800">
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>{selectedFile.name}</span>
-                    <span className="text-emerald-600 dark:text-emerald-400">
-                      ({formatFileSize(selectedFile.size)})
-                    </span>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              onChange={handleFileChange}
+              accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.rtf,.odt,.ods,.odp,.epub,.mobi,.zip,.rar,.7z,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain,image/*"
+              className="hidden"
+            />
+
+            {!selectedFile ? (
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-xl hover:border-blue-500 transition-colors bg-slate-50/50 dark:bg-slate-900/30 cursor-pointer select-none"
+              >
+                <div className="space-y-1 text-center">
+                  <UploadCloud className="mx-auto h-10 w-10 text-slate-400" />
+                  <div className="text-sm font-semibold text-blue-600 dark:text-blue-400">
+                    Click to choose file from your device (phone, tablet, or PC)
                   </div>
-                )}
+                  <p className="text-xs text-slate-500">
+                    Supports digital textbooks, scanned books, slide decks, worksheets from your device
+                  </p>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="mt-1 flex items-center justify-between p-3.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800">
+                <div className="flex items-center gap-2.5 overflow-hidden min-w-0">
+                  <div className="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-900/60 flex items-center justify-center shrink-0">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">
+                      {selectedFile.name}
+                    </p>
+                    <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-mono">
+                      {formatFileSize(selectedFile.size)} • Ready to upload
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="px-2.5 py-1 text-[11px] font-medium text-blue-700 dark:text-blue-300 bg-white dark:bg-slate-800 hover:bg-blue-50 rounded-lg transition-colors border border-blue-200 dark:border-blue-700"
+                  >
+                    Change
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedFile(null);
+                      if (fileInputRef.current) fileInputRef.current.value = '';
+                    }}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                    title="Remove file"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
+
+          {/* Real-time Upload Progress Bar */}
+          {isUploading && (
+            <div className="p-3.5 bg-blue-50 dark:bg-blue-950/40 rounded-xl border border-blue-200 dark:border-blue-800 space-y-2">
+              <div className="flex items-center justify-between text-xs font-bold text-blue-800 dark:text-blue-200">
+                <span className="flex items-center gap-1.5">
+                  <UploadCloud className="w-4 h-4 text-blue-600 animate-pulse" />
+                  <span>Uploading to Cloud Storage...</span>
+                </span>
+                <span className="font-mono text-sm">{uploadProgress}%</span>
+              </div>
+              <div className="w-full bg-blue-200 dark:bg-blue-900/60 rounded-full h-2.5 overflow-hidden">
+                <div
+                  className="bg-blue-600 h-2.5 rounded-full transition-all duration-150 ease-out"
+                  style={{ width: `${uploadProgress}%` }}
+                />
+              </div>
+              <p className="text-[11px] text-blue-700/80 dark:text-blue-300">
+                {uploadProgress < 100
+                  ? 'Streaming document directly to Cloudinary CDN from your device...'
+                  : 'Securing cloud link and registering material for students...'}
+              </p>
+            </div>
+          )}
 
           {/* Buttons */}
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-200 dark:border-slate-700">
@@ -844,7 +981,7 @@ const TeacherMaterialsPage = () => {
               {isUploading ? (
                 <>
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  <span>Uploading & Publishing...</span>
+                  <span>{uploadProgress > 0 ? `Uploading ${uploadProgress}%...` : 'Starting Upload...'}</span>
                 </>
               ) : (
                 <>

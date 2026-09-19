@@ -24,16 +24,52 @@ const storage = multer.diskStorage({
   },
 });
 
-// File filter accepting Word, PDF, Docs, Text, and common formats
-const fileFilter = (req, file, cb) => {
-  const allowedExtensions = /.(doc|docx|pdf|txt|rtf|odt|xls|xlsx|ppt|pptx|zip|rar|png|jpg|jpeg)$/i;
-  const ext = path.extname(file.originalname).toLowerCase();
+// File filter accepting all standard educational document and media formats across devices
+const allowedExtensions = /\.(pdf|doc|docx|ppt|pptx|xls|xlsx|txt|rtf|odt|ods|odp|epub|mobi|zip|rar|7z|csv|png|jpg|jpeg|webp)$/i;
 
-  if (allowedExtensions.test(ext)) {
-    cb(null, true);
-  } else {
-    cb(new Error(`File format ${ext} is not supported. Please upload Word (.doc, .docx), PDF, or document files.`));
+const allowedMimePrefixes = [
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats',
+  'application/vnd.ms-',
+  'application/vnd.oasis.opendocument',
+  'application/epub',
+  'application/zip',
+  'application/x-zip',
+  'application/x-rar',
+  'application/x-7z',
+  'application/rtf',
+  'text/',
+  'image/',
+  'application/octet-stream', // Common Android and cloud storage fallback
+];
+
+const fileFilter = (req, file, cb) => {
+  const originalName = file.originalname || 'document.pdf';
+  const ext = path.extname(originalName).toLowerCase();
+  const mime = (file.mimetype || '').toLowerCase();
+
+  const isExtAllowed = ext ? allowedExtensions.test(ext) : false;
+  const isMimeAllowed = allowedMimePrefixes.some((prefix) => mime.startsWith(prefix));
+
+  if (isExtAllowed || isMimeAllowed) {
+    // If mobile device sent a file without an extension, synthesize a safe default extension based on MIME
+    if (!ext) {
+      if (mime.includes('pdf')) file.originalname = `${originalName}.pdf`;
+      else if (mime.includes('word') || mime.includes('officedocument.wordprocessingml')) file.originalname = `${originalName}.docx`;
+      else if (mime.includes('presentation') || mime.includes('powerpoint')) file.originalname = `${originalName}.pptx`;
+      else if (mime.includes('sheet') || mime.includes('excel')) file.originalname = `${originalName}.xlsx`;
+      else if (mime.startsWith('image/')) file.originalname = `${originalName}.jpg`;
+      else file.originalname = `${originalName}.pdf`;
+    }
+    return cb(null, true);
   }
+
+  cb(
+    new Error(
+      `File format "${ext || mime}" is not supported. Please upload Word (.doc, .docx), PDF (.pdf), PowerPoint, Excel, or standard document files.`
+    )
+  );
 };
 
 const upload = multer({
