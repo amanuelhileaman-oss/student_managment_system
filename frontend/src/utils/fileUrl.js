@@ -246,7 +246,17 @@ export const triggerFileDownload = async (endpointOrUrl, fileName = 'document', 
     }, 1500);
   } catch (err) {
     console.error('[Download Error]:', err);
-    throw new Error(err.response?.data?.message || err.message || 'Could not download the requested file.');
+    let errorMsg = err.message || 'Could not download the requested file.';
+    if (err.response?.data instanceof Blob) {
+      try {
+        const text = await err.response.data.text();
+        const json = JSON.parse(text);
+        if (json.message) errorMsg = json.message;
+      } catch {}
+    } else if (err.response?.data?.message) {
+      errorMsg = err.response.data.message;
+    }
+    throw new Error(errorMsg);
   }
 };
 
@@ -276,15 +286,31 @@ export const triggerFilePreview = async (viewEndpoint, downloadEndpoint = '', fi
     ? viewEndpoint.replace(/^\/api/, '')
     : viewEndpoint;
 
-  const res = await api.get(cleanEndpoint, {
-    responseType: 'blob',
-    onDownloadProgress: (progressEvent) => {
-      if (progressEvent.total && onProgress) {
-        const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-        onProgress(Math.min(99, percent));
-      }
-    },
-  });
+  let res;
+  try {
+    res = await api.get(cleanEndpoint, {
+      responseType: 'blob',
+      onDownloadProgress: (progressEvent) => {
+        if (progressEvent.total && onProgress) {
+          const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          onProgress(Math.min(99, percent));
+        }
+      },
+    });
+  } catch (err) {
+    console.error('[Preview Error]:', err);
+    let errorMsg = err.message || 'Could not open document for online viewing.';
+    if (err.response?.data instanceof Blob) {
+      try {
+        const text = await err.response.data.text();
+        const json = JSON.parse(text);
+        if (json.message) errorMsg = json.message;
+      } catch {}
+    } else if (err.response?.data?.message) {
+      errorMsg = err.response.data.message;
+    }
+    throw new Error(errorMsg);
+  }
 
   const blob = new Blob([res.data], {
     type: res.headers['content-type'] || 'application/pdf',
