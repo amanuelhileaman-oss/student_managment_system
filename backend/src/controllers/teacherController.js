@@ -1,6 +1,9 @@
+const path = require('path');
+const fs = require('fs');
 const { query, withTransaction } = require('../config/db');
 const { propagateGroupScore, calculateLetterGrade } = require('../services/gradingService');
 const { logAudit } = require('../services/auditService');
+const cloudinaryService = require('../services/cloudinaryService');
 
 /**
  * Helper to get teacher ID from authenticated user ID
@@ -123,18 +126,24 @@ const getGradeRecords = async (req, res, next) => {
       });
     }
 
-    // Retrieve roster and matching grades
+    // Resolve active academic year and targeted semester (1 or 2)
+    const yearRes = await query('SELECT id, current_semester FROM academic_years WHERE is_current = TRUE LIMIT 1');
+    const activeSemester = yearRes.rows[0]?.current_semester || 1;
+    const targetSemester = req.query.semester ? parseInt(req.query.semester, 10) : activeSemester;
+
+    // Retrieve roster and matching grades for the specific semester
     const result = await query(
       `SELECT s.id as student_id, s.student_id as student_code,
               u.first_name, u.last_name,
               gr.id as grade_id, gr.quiz_score, gr.midterm_score, gr.assignment_score, gr.final_score,
               gr.total_score, gr.letter_grade, gr.remarks,
+              COALESCE(gr.semester, $3) as semester,
               lg.group_code, lg.group_name, lg.group_score as evaluated_group_score,
               lg.group_status, lg.assignment_title, lg.max_score as assignment_max_score
        FROM enrollments e
        JOIN students s ON e.student_id = s.id
        JOIN users u ON s.user_id = u.id
-       LEFT JOIN grade_records gr ON s.id = gr.student_id AND gr.subject_id = $1 AND gr.section_id = $2
+       LEFT JOIN grade_records gr ON s.id = gr.student_id AND gr.subject_id = $1 AND gr.section_id = $2 AND gr.semester = $3
        LEFT JOIN LATERAL (
          SELECT ag.group_code, ag.group_name, ag.group_score, ag.status as group_status,
                 a.title as assignment_title, a.max_score
@@ -143,15 +152,21 @@ const getGradeRecords = async (req, res, next) => {
          JOIN assignments a ON ag.assignment_id = a.id
          JOIN teacher_assignments ta ON a.teacher_assignment_id = ta.id
          WHERE agm.student_id = s.id AND ta.subject_id = $1 AND ta.section_id = $2
+           AND COALESCE(a.semester, 1) = $3
          ORDER BY ag.created_at DESC
          LIMIT 1
        ) lg ON true
        WHERE e.section_id = $2 AND e.status = 'ENROLLED'
        ORDER BY u.first_name ASC, u.last_name ASC`,
-      [parseInt(subjectId, 10), parseInt(sectionId, 10)]
+      [parseInt(subjectId, 10), parseInt(sectionId, 10), targetSemester]
     );
 
-    res.json({ success: true, data: result.rows });
+    res.json({
+      success: true,
+      activeSemester,
+      selectedSemester: targetSemester,
+      data: result.rows,
+    });
   } catch (error) {
     next(error);
   }
@@ -165,7 +180,17 @@ const updateStudentGrade = async (req, res, next) => {
     const teacher = await getTeacherByUserId(req.user.id);
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher profile not found.' });
 
-    const { studentId, subjectId, sectionId, quizScore = 0, midtermScore = 0, assignmentScore = 0, finalScore = 0, remarks = '' } = req.body;
+    const {
+      studentId,
+      subjectId,
+      sectionId,
+      semester,
+      quizScore = 0,
+      midtermScore = 0,
+      assignmentScore = 0,
+      finalScore = 0,
+      remarks = '',
+    } = req.body;
 
     // Verify authorization
     const authCheck = await query(
@@ -179,6 +204,11 @@ const updateStudentGrade = async (req, res, next) => {
       });
     }
     const yearId = authCheck.rows[0].academic_year_id;
+
+    // Resolve target semester
+    const yearRes = await query('SELECT current_semester FROM academic_years WHERE id = $1', [yearId]);
+    const activeSemester = yearRes.rows[0]?.current_semester || 1;
+    const targetSemester = semester ? parseInt(semester, 10) : activeSemester;
 
     // Validate score ranges dynamically against active grading policy
     const q = parseFloat(quizScore);
@@ -223,21 +253,21 @@ const updateStudentGrade = async (req, res, next) => {
 
     const gradeRes = await query(
       `INSERT INTO grade_records
-        (student_id, subject_id, section_id, academic_year_id, quiz_score, midterm_score, assignment_score, final_score, total_score, letter_grade, remarks, updated_by, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
-       ON CONFLICT (student_id, subject_id, academic_year_id)
+        (student_id, subject_id, section_id, academic_year_id, semester, quiz_score, midterm_score, assignment_score, final_score, total_score, letter_grade, remarks, updated_by, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+       ON CONFLICT (student_id, subject_id, academic_year_id, semester)
        DO UPDATE SET
-         quiz_score = $5,
-         midterm_score = $6,
-         assignment_score = $7,
-         final_score = $8,
-         total_score = $9,
-         letter_grade = $10,
-         remarks = $11,
-         updated_by = $12,
+         quiz_score = $6,
+         midterm_score = $7,
+         assignment_score = $8,
+         final_score = $9,
+         total_score = $10,
+         letter_grade = $11,
+         remarks = $12,
+         updated_by = $13,
          updated_at = NOW()
        RETURNING *`,
-      [resolvedStudentId, parseInt(subjectId, 10), parseInt(sectionId, 10), yearId, q, m, a, f, total, letter, remarks, req.user.id]
+      [resolvedStudentId, parseInt(subjectId, 10), parseInt(sectionId, 10), yearId, targetSemester, q, m, a, f, total, letter, remarks, req.user.id]
     );
 
     await logAudit({
@@ -266,9 +296,8 @@ const getAssignments = async (req, res, next) => {
     const teacher = await getTeacherByUserId(req.user.id);
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher profile not found.' });
 
-    const result = await query(
-      `SELECT a.id, a.title, a.description, a.assignment_type, a.max_score, a.due_date, a.instructions, a.created_at,
-              a.file_url, a.file_name, a.file_size, a.file_type,
+    let sql = `SELECT a.id, a.title, a.description, a.assignment_type, a.max_score, a.due_date, a.instructions, a.created_at,
+              a.file_url, a.file_name, a.file_size, a.file_type, COALESCE(a.semester, 1) as semester,
               s.name as subject_name, sec.section_name, sec.grade_level,
               COUNT(DISTINCT ag.id) as group_count
        FROM assignments a
@@ -276,13 +305,20 @@ const getAssignments = async (req, res, next) => {
        JOIN subjects s ON ta.subject_id = s.id
        JOIN sections sec ON ta.section_id = sec.id
        LEFT JOIN assignment_groups ag ON a.id = ag.assignment_id
-       WHERE ta.teacher_id = $1 OR ta.teacher_id = $2 OR (ta.subject_id, ta.section_id) IN (
+       WHERE (ta.teacher_id = $1 OR ta.teacher_id = $2 OR (ta.subject_id, ta.section_id) IN (
          SELECT subject_id, section_id FROM teacher_assignments WHERE teacher_id = $1 OR teacher_id = $2
-       )
-       GROUP BY a.id, s.name, sec.section_name, sec.grade_level, a.file_url, a.file_name, a.file_size, a.file_type
-       ORDER BY a.created_at DESC`,
-      [teacher.id, req.user.id]
-    );
+       ))`;
+    const params = [teacher.id, req.user.id];
+
+    if (req.query.semester) {
+      params.push(parseInt(req.query.semester, 10));
+      sql += ` AND a.semester = $${params.length}`;
+    }
+
+    sql += ` GROUP BY a.id, s.name, sec.section_name, sec.grade_level, a.file_url, a.file_name, a.file_size, a.file_type, a.semester
+       ORDER BY a.created_at DESC`;
+
+    const result = await query(sql, params);
 
     res.json({ success: true, data: result.rows });
   } catch (error) {
@@ -320,16 +356,39 @@ const createAssignment = async (req, res, next) => {
     const finalInst = (instructions && instructions.trim()) || (description && description.trim()) || '';
 
     // File attachment (PDF, Word, Doc, PPT, TXT, etc.)
-    const fileUrl = req.file ? `/uploads/assignments/${req.file.filename}` : null;
-    const fileName = req.file ? req.file.originalname : null;
-    const fileSize = req.file ? req.file.size : 0;
-    const fileType = req.file ? req.file.mimetype : null;
+    let fileUrl = req.file ? `/uploads/assignments/${req.file.filename}` : null;
+    let fileName = req.file ? req.file.originalname : null;
+    let fileSize = req.file ? req.file.size : 0;
+    let fileType = req.file ? req.file.mimetype : null;
+
+    if (req.file && cloudinaryService.isConfigured()) {
+      try {
+        const fileBuffer = req.file.buffer || (req.file.path && fs.existsSync(req.file.path) ? fs.readFileSync(req.file.path) : null);
+        if (fileBuffer) {
+          const cloudResult = await cloudinaryService.uploadBuffer(fileBuffer, {
+            folder: 'ethio_highhub/assignments',
+            originalName: fileName,
+            resourceType: 'auto',
+          });
+          if (cloudResult && cloudResult.secure_url) {
+            fileUrl = cloudResult.secure_url;
+            fileSize = cloudResult.bytes || fileSize;
+          }
+        }
+      } catch (cloudErr) {
+        console.warn('[Storage] Cloudinary assignment upload fallback to local disk:', cloudErr.message);
+      }
+    }
+
+    // Resolve active semester for assignment
+    const yearRes = await query('SELECT current_semester FROM academic_years WHERE is_current = TRUE LIMIT 1');
+    const assignSemester = req.body.semester ? parseInt(req.body.semester, 10) : (yearRes.rows[0]?.current_semester || 1);
 
     const insRes = await query(
-      `INSERT INTO assignments (teacher_assignment_id, title, description, assignment_type, max_score, due_date, instructions, file_url, file_name, file_size, file_type)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      `INSERT INTO assignments (teacher_assignment_id, title, description, assignment_type, max_score, due_date, instructions, file_url, file_name, file_size, file_type, semester)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING *`,
-      [teacherAssignmentId, title.trim(), finalDesc, assignmentType, parseFloat(maxScore) || 20, dueDate, finalInst, fileUrl, fileName, fileSize, fileType]
+      [teacherAssignmentId, title.trim(), finalDesc, assignmentType, parseFloat(maxScore) || 20, dueDate, finalInst, fileUrl, fileName, fileSize, fileType, assignSemester]
     );
 
     await logAudit({
@@ -462,18 +521,22 @@ const getAssignmentSectionStudents = async (req, res, next) => {
 
     const assignInfo = assignCheck.rows[0];
 
-    // Fetch students enrolled in this section and identify any existing group assignment
+    // Fetch students enrolled in this section and identify any existing group assignment for THIS assignment
     const studentsRes = await query(
       `SELECT s.id as student_id, s.student_id as student_code, s.gender,
               u.first_name, u.last_name, u.email,
-              ag.id as current_group_id,
-              ag.group_code as current_group_code,
-              ag.group_name as current_group_name
+              existing_grp.current_group_id,
+              existing_grp.current_group_code,
+              existing_grp.current_group_name
        FROM enrollments e
        JOIN students s ON e.student_id = s.id
        JOIN users u ON s.user_id = u.id
-       LEFT JOIN assignment_group_members agm ON agm.student_id = s.id
-       LEFT JOIN assignment_groups ag ON agm.group_id = ag.id AND ag.assignment_id = $1
+       LEFT JOIN (
+         SELECT agm.student_id, ag.id as current_group_id, ag.group_code as current_group_code, ag.group_name as current_group_name
+         FROM assignment_group_members agm
+         JOIN assignment_groups ag ON agm.group_id = ag.id
+         WHERE ag.assignment_id = $1
+       ) existing_grp ON existing_grp.student_id = s.id
        WHERE e.section_id = $2 AND e.status = 'ENROLLED'
        ORDER BY u.first_name ASC, u.last_name ASC`,
       [id, assignInfo.section_id]
@@ -502,7 +565,7 @@ const createAssignmentGroup = async (req, res, next) => {
     const { assignmentId, groupName, studentIds = [] } = req.body;
 
     const assignCheck = await query(
-      `SELECT a.id, s.code as subject_code, sec.section_name, sec.grade_level
+      `SELECT a.id, s.code as subject_code, sec.section_name, sec.grade_level, COALESCE(a.semester, 1) as semester
        FROM assignments a
        JOIN teacher_assignments ta ON a.teacher_assignment_id = ta.id
        JOIN subjects s ON ta.subject_id = s.id
@@ -519,7 +582,30 @@ const createAssignmentGroup = async (req, res, next) => {
     }
 
     const info = assignCheck.rows[0];
-    const groupCode = `GROUP-${info.subject_code.replace(/[^A-Z0-9]/gi, '')}-${info.section_name}-${Date.now().toString().slice(-4)}`;
+    const semPrefix = parseInt(info.semester, 10) === 2 ? 'S2' : 'S1';
+    const groupCode = `GROUP-${semPrefix}-${info.subject_code.replace(/[^A-Z0-9]/gi, '')}-${info.section_name}-${Date.now().toString().slice(-4)}`;
+
+    const validStudentIds = Array.isArray(studentIds) ? studentIds.map((id) => parseInt(id, 10)).filter(Boolean) : [];
+
+    // Strict validation: Verify none of the selected students are already assigned to a group for this assignment
+    if (validStudentIds.length > 0) {
+      const conflictRes = await query(
+        `SELECT s.id, s.student_id as student_code, u.first_name, u.last_name, ag.group_name, ag.group_code
+         FROM assignment_group_members agm
+         JOIN assignment_groups ag ON agm.group_id = ag.id
+         JOIN students s ON agm.student_id = s.id
+         JOIN users u ON s.user_id = u.id
+         WHERE ag.assignment_id = $1 AND agm.student_id = ANY($2::int[])`,
+        [assignmentId, validStudentIds]
+      );
+      if (conflictRes.rows.length > 0) {
+        const c = conflictRes.rows[0];
+        return res.status(400).json({
+          success: false,
+          message: `Student ${c.first_name} ${c.last_name} (${c.student_code}) is already assigned to group "${c.group_name}" (${c.group_code}) for this assignment. A student can only be assigned to one group per assignment.`,
+        });
+      }
+    }
 
     const groupResult = await withTransaction(async (client) => {
       const gRes = await client.query(
@@ -530,12 +616,12 @@ const createAssignmentGroup = async (req, res, next) => {
       );
       const group = gRes.rows[0];
 
-      for (const sId of studentIds) {
+      for (const sId of validStudentIds) {
         await client.query(
-          `INSERT INTO assignment_group_members (group_id, student_id)
-           VALUES ($1, $2)
-           ON CONFLICT (group_id, student_id) DO NOTHING`,
-          [group.id, sId]
+          `INSERT INTO assignment_group_members (group_id, student_id, assignment_id)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (assignment_id, student_id) DO NOTHING`,
+          [group.id, sId, assignmentId]
         );
       }
 
@@ -623,6 +709,11 @@ const syncSectionGroupScores = async (req, res, next) => {
         success: false,
         message: 'Provide groupCode, or subjectId & sectionId, or assignmentId to sync scores.',
       });
+    }
+
+    if (req.body.semester) {
+      params.push(parseInt(req.body.semester, 10));
+      groupsQuery += ` AND a.semester = $${params.length}`;
     }
 
     const groupsRes = await query(groupsQuery, params);

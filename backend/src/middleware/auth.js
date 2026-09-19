@@ -9,7 +9,10 @@ const JWT_SECRET = process.env.JWT_SECRET || 'production_highschool_jwt_secret_t
  */
 const authenticateToken = async (req, res, next) => {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : null;
+  let token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : null;
+  if (!token && req.query && req.query.token) {
+    token = req.query.token;
+  }
 
   if (!token) {
     return res.status(401).json({

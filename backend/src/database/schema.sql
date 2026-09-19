@@ -72,6 +72,7 @@ CREATE TABLE academic_years (
     id SERIAL PRIMARY KEY,
     year_name VARCHAR(50) UNIQUE NOT NULL, -- e.g. "2026-2027"
     is_current BOOLEAN DEFAULT FALSE,
+    current_semester INT NOT NULL DEFAULT 1 CHECK (current_semester IN (1, 2)),
     start_date DATE NOT NULL,
     end_date DATE NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW()
@@ -311,6 +312,7 @@ CREATE TABLE assignments (
     max_score NUMERIC(5,2) NOT NULL DEFAULT 20.00,
     due_date TIMESTAMPTZ NOT NULL,
     instructions TEXT,
+    semester INT DEFAULT 1 CHECK (semester IN (1, 2)),
     file_url VARCHAR(500),
     file_name VARCHAR(255),
     file_size BIGINT DEFAULT 0,
@@ -338,8 +340,10 @@ CREATE TABLE assignment_group_members (
     id SERIAL PRIMARY KEY,
     group_id INT NOT NULL REFERENCES assignment_groups(id) ON DELETE CASCADE,
     student_id INT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    assignment_id INT REFERENCES assignments(id) ON DELETE CASCADE,
     individual_score_override NUMERIC(5,2),
-    CONSTRAINT uq_group_member UNIQUE(group_id, student_id)
+    CONSTRAINT uq_group_member UNIQUE(group_id, student_id),
+    CONSTRAINT uq_agm_assignment_student UNIQUE(assignment_id, student_id)
 );
 
 -- 17. GRADE RECORDS (Student Results)
@@ -355,9 +359,10 @@ CREATE TABLE grade_records (
     total_score NUMERIC(5,2) DEFAULT 0.00 CHECK (total_score >= 0 AND total_score <= 100),
     letter_grade VARCHAR(5),
     remarks TEXT,
+    semester INT NOT NULL DEFAULT 1 CHECK (semester IN (1, 2)),
     updated_by INT REFERENCES users(id) ON DELETE SET NULL,
     updated_at TIMESTAMPTZ DEFAULT NOW(),
-    CONSTRAINT uq_student_subject_year_grade UNIQUE(student_id, subject_id, academic_year_id)
+    CONSTRAINT uq_student_subject_year_semester UNIQUE(student_id, subject_id, academic_year_id, semester)
 );
 
 -- 18. ANNOUNCEMENTS

@@ -23,7 +23,9 @@ import {
   FileCheck,
   Paperclip,
   Download,
+  Lock,
 } from 'lucide-react';
+import { resolveFileUrl, triggerFileDownload, triggerFilePreview } from '../../utils/fileUrl';
 
 const AssignmentsPage = () => {
   const [assignments, setAssignments] = useState([]);
@@ -31,6 +33,38 @@ const AssignmentsPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [downloadingId, setDownloadingId] = useState(null);
+  const [viewingId, setViewingId] = useState(null);
+
+  const handleViewAttachment = async (viewEndpoint, downloadEndpoint, fileName, idKey) => {
+    try {
+      setViewingId(idKey);
+      setError('');
+      const isPdf = (fileName || '').toLowerCase().endsWith('.pdf');
+      if (!isPdf) {
+        return await handleDownloadFile(downloadEndpoint, fileName, idKey);
+      }
+      await triggerFilePreview(viewEndpoint, downloadEndpoint, fileName);
+    } catch (err) {
+      console.error('View attachment error:', err);
+      setError(err.message || 'Could not open document for online viewing.');
+    } finally {
+      setViewingId(null);
+    }
+  };
+
+  const handleDownloadFile = async (target, fileName, key) => {
+    try {
+      setDownloadingId(key);
+      setError('');
+      await triggerFileDownload(target, fileName);
+    } catch (err) {
+      console.error('Download error:', err);
+      setError(err.message || 'Failed to download file.');
+    } finally {
+      setDownloadingId(null);
+    }
+  };
 
   // Helper to format file sizes
   const formatFileSize = (bytes) => {
@@ -73,7 +107,9 @@ const AssignmentsPage = () => {
     maxScore: 20,
     dueDate: '',
     instructions: '',
+    semester: 1,
   });
+  const [semesterFilter, setSemesterFilter] = useState('ALL');
   const [assignmentFile, setAssignmentFile] = useState(null);
   const fileInputRef = useRef(null);
 
@@ -123,6 +159,8 @@ const AssignmentsPage = () => {
   const openCreateModal = () => {
     setFormError('');
     setAssignmentFile(null);
+    // Find active or default semester from assignments or fallback to 1
+    const defaultSem = assignments.find((a) => a.semester)?.semester || 1;
     setAssignForm({
       teacherAssignmentId: classes[0]?.assignment_id || '',
       title: '',
@@ -130,6 +168,7 @@ const AssignmentsPage = () => {
       maxScore: 20,
       dueDate: getDefaultDueDate(),
       instructions: '',
+      semester: defaultSem,
     });
     setIsCreateAssignOpen(true);
   };
@@ -165,6 +204,7 @@ const AssignmentsPage = () => {
       formData.append('maxScore', String(assignForm.maxScore));
       formData.append('dueDate', assignForm.dueDate);
       formData.append('instructions', assignForm.instructions.trim());
+      formData.append('semester', String(assignForm.semester || 1));
       if (assignmentFile) {
         formData.append('file', assignmentFile);
       }
@@ -230,6 +270,11 @@ const AssignmentsPage = () => {
   };
 
   const toggleStudentSelection = (studentId) => {
+    const student = sectionStudents.find((s) => s.student_id === studentId);
+    if (student?.current_group_id) {
+      setError(`Cannot select ${student.first_name} ${student.last_name}: already assigned to group "${student.current_group_name || student.current_group_code}".`);
+      return;
+    }
     setSelectedStudentIds((prev) =>
       prev.includes(studentId) ? prev.filter((id) => id !== studentId) : [...prev, studentId]
     );
@@ -256,6 +301,13 @@ const AssignmentsPage = () => {
       setError('Please provide a team group name.');
       return;
     }
+
+    // Filter to ensure only unassigned students can be submitted
+    const cleanStudentIds = selectedStudentIds.filter((id) => {
+      const st = sectionStudents.find((s) => s.student_id === id);
+      return st && !st.current_group_id;
+    });
+
     setSaving(true);
     setError('');
 
@@ -263,7 +315,7 @@ const AssignmentsPage = () => {
       const res = await api.post('/teachers/assignments/groups', {
         assignmentId: selectedAssignForGroup.id,
         groupName: groupForm.groupName.trim(),
-        studentIds: selectedStudentIds,
+        studentIds: cleanStudentIds,
       });
       setSuccessMsg(res.data.message || 'Project group created successfully.');
       setIsCreateGroupOpen(false);
@@ -330,6 +382,49 @@ const AssignmentsPage = () => {
       {error && <Alert type="error" title="Error" message={error} onClose={() => setError('')} />}
       {successMsg && <Alert type="success" title="Success" message={successMsg} onClose={() => setSuccessMsg('')} />}
 
+      {/* Semester Filter Tabs */}
+      <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-3 overflow-x-auto">
+        <button
+          type="button"
+          onClick={() => setSemesterFilter('ALL')}
+          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 ${
+            semesterFilter === 'ALL'
+              ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 shadow-xs'
+              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+          }`}
+        >
+          All Assignments ({assignments.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => setSemesterFilter('1')}
+          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
+            semesterFilter === '1'
+              ? 'bg-amber-600 text-white shadow-xs'
+              : 'text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40'
+          }`}
+        >
+          <span>🍂 Semester 1</span>
+          <span className="text-[11px] opacity-80">
+            ({assignments.filter((a) => Number(a.semester) === 1).length})
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setSemesterFilter('2')}
+          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
+            semesterFilter === '2'
+              ? 'bg-purple-600 text-white shadow-xs'
+              : 'text-purple-700 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-950/40'
+          }`}
+        >
+          <span>🌸 Semester 2</span>
+          <span className="text-[11px] opacity-80">
+            ({assignments.filter((a) => Number(a.semester) === 2).length})
+          </span>
+        </button>
+      </div>
+
       {/* Notice if Teacher has no assigned classes */}
       {classes.length === 0 && (
         <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 flex items-start gap-3 text-amber-900 dark:text-amber-200 text-xs sm:text-sm">
@@ -343,17 +438,40 @@ const AssignmentsPage = () => {
 
       {/* Assignment Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-        {assignments.length > 0 ? (
-          assignments.map((a) => (
+        {assignments
+          .filter((a) => {
+            if (semesterFilter === '1') return Number(a.semester) === 1;
+            if (semesterFilter === '2') return Number(a.semester) === 2;
+            return true;
+          })
+          .length > 0 ? (
+          assignments
+            .filter((a) => {
+              if (semesterFilter === '1') return Number(a.semester) === 1;
+              if (semesterFilter === '2') return Number(a.semester) === 2;
+              return true;
+            })
+            .map((a) => (
             <div
               key={a.id}
               className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between transition-all hover:border-slate-300 dark:hover:border-slate-700"
             >
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <Badge variant={a.assignment_type === 'GROUP' ? 'primary' : 'neutral'} size="sm">
-                    {a.assignment_type === 'GROUP' ? 'Collaborative Group' : 'Individual'}
-                  </Badge>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <Badge variant={a.assignment_type === 'GROUP' ? 'primary' : 'neutral'} size="sm">
+                      {a.assignment_type === 'GROUP' ? 'Collaborative Group' : 'Individual'}
+                    </Badge>
+                    {Number(a.semester) === 2 ? (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-purple-100 dark:bg-purple-950/80 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
+                        🌸 Sem 2
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                        🍂 Sem 1
+                      </span>
+                    )}
+                  </div>
                   <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
                     Max: <strong className="text-slate-800 dark:text-slate-200">{a.max_score}</strong> pts
                   </span>
@@ -389,24 +507,25 @@ const AssignmentsPage = () => {
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
-                      <a
-                        href={a.file_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="px-2 py-1 text-[11px] font-semibold rounded-lg bg-white dark:bg-slate-800 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-700/60 hover:bg-emerald-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-1 shadow-xs"
+                      <button
+                        type="button"
+                        onClick={() => handleViewAttachment(`/teachers/assignments/${a.id}/view`, `/teachers/assignments/${a.id}/download`, a.file_name || 'document.pdf', `assign-view-${a.id}`)}
+                        disabled={viewingId === `assign-view-${a.id}`}
+                        className="px-2 py-1 text-[11px] font-semibold rounded-lg bg-white dark:bg-slate-800 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-700/60 hover:bg-emerald-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-1 shadow-xs disabled:opacity-50"
                         title="View Document"
                       >
                         <Eye className="w-3 h-3" />
-                        <span>View</span>
-                      </a>
-                      <a
-                        href={a.file_url}
-                        download={a.file_name || 'assignment-document'}
-                        className="p-1 rounded-md text-slate-400 hover:text-emerald-600 hover:bg-emerald-100/50 dark:hover:bg-emerald-900/40 transition-colors"
+                        <span>{viewingId === `assign-view-${a.id}` ? 'Opening...' : 'View'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadFile(`/teachers/assignments/${a.id}/download`, a.file_name || 'assignment-document', `assign-dl-${a.id}`)}
+                        disabled={downloadingId === `assign-dl-${a.id}`}
+                        className="p-1 rounded-md text-slate-400 hover:text-emerald-600 hover:bg-emerald-100/50 dark:hover:bg-emerald-900/40 transition-colors disabled:opacity-50"
                         title="Download Document"
                       >
-                        <Download className="w-3.5 h-3.5" />
-                      </a>
+                        <Download className={`w-3.5 h-3.5 ${downloadingId === `assign-dl-${a.id}` ? 'animate-bounce' : ''}`} />
+                      </button>
                     </div>
                   </div>
                 )}
@@ -541,6 +660,37 @@ const AssignmentsPage = () => {
               onChange={(e) => setAssignForm({ ...assignForm, title: e.target.value })}
               className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800/90 border border-slate-300 dark:border-slate-700 rounded-xl text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-colors"
             />
+          </div>
+
+          {/* Field: Academic Semester Selection */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+              Target Academic Semester
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setAssignForm({ ...assignForm, semester: 1 })}
+                className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                  Number(assignForm.semester) === 1
+                    ? 'bg-amber-50 dark:bg-amber-950/50 border-amber-500 text-amber-700 dark:text-amber-300 ring-2 ring-amber-500/20 shadow-xs'
+                    : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'
+                }`}
+              >
+                <span>🍂 Semester 1</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setAssignForm({ ...assignForm, semester: 2 })}
+                className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                  Number(assignForm.semester) === 2
+                    ? 'bg-purple-50 dark:bg-purple-950/50 border-purple-500 text-purple-700 dark:text-purple-300 ring-2 ring-purple-500/20 shadow-xs'
+                    : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'
+                }`}
+              >
+                <span>🌸 Semester 2</span>
+              </button>
+            </div>
           </div>
 
           {/* Row: Assignment Type & Maximum Score */}
@@ -818,23 +968,35 @@ const AssignmentsPage = () => {
                     return (
                       <div
                         key={s.student_id}
-                        onClick={() => toggleStudentSelection(s.student_id)}
-                        className={`p-2.5 rounded-lg flex items-center justify-between cursor-pointer transition-colors ${
-                          isSelected
-                            ? 'bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-300/60 dark:border-emerald-800/60'
-                            : 'hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                        onClick={() => {
+                          if (isAlreadyInGroup) {
+                            setError(`Cannot select ${s.first_name} ${s.last_name}: already assigned to group "${s.current_group_name || s.current_group_code}".`);
+                            return;
+                          }
+                          toggleStudentSelection(s.student_id);
+                        }}
+                        className={`p-2.5 rounded-lg flex items-center justify-between transition-colors ${
+                          isAlreadyInGroup
+                            ? 'opacity-60 cursor-not-allowed bg-slate-100/70 dark:bg-slate-800/40 border border-slate-200/80 dark:border-slate-800/80 select-none'
+                            : isSelected
+                            ? 'cursor-pointer bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-300/60 dark:border-emerald-800/60'
+                            : 'cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50'
                         }`}
                       >
                         <div className="flex items-center gap-2.5">
                           <input
                             type="checkbox"
                             checked={isSelected}
+                            disabled={isAlreadyInGroup}
                             onChange={() => {}} // Handled by outer div
-                            className="rounded text-emerald-600 focus:ring-emerald-500 h-4 w-4 pointer-events-none"
+                            className="rounded text-emerald-600 focus:ring-emerald-500 h-4 w-4 pointer-events-none disabled:opacity-40"
                           />
                           <div>
-                            <div className="text-xs font-bold text-slate-900 dark:text-slate-100">
-                              {s.first_name} {s.last_name}
+                            <div className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                              <span>{s.first_name} {s.last_name}</span>
+                              {isAlreadyInGroup && (
+                                <Lock className="w-3 h-3 text-amber-500 shrink-0" title="Already assigned to a group" />
+                              )}
                             </div>
                             <div className="text-[11px] font-mono text-slate-400">
                               {s.student_code}
@@ -844,8 +1006,9 @@ const AssignmentsPage = () => {
 
                         <div className="text-right">
                           {isAlreadyInGroup ? (
-                            <span className="px-2 py-0.5 rounded-md bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 text-[11px] font-medium border border-amber-200 dark:border-amber-800/60">
-                              In {s.current_group_name || s.current_group_code}
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 text-[11px] font-medium border border-amber-200 dark:border-amber-800/60">
+                              <Lock className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+                              <span>In {s.current_group_name || s.current_group_code}</span>
                             </span>
                           ) : (
                             <span className="px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 text-[11px] font-medium border border-emerald-200 dark:border-emerald-800/60">
@@ -916,10 +1079,15 @@ const AssignmentsPage = () => {
                   >
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                       <div>
-                        <div className="flex items-center gap-2 mb-1">
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
                           <h4 className="text-sm font-bold text-slate-900 dark:text-slate-100">{g.group_name}</h4>
-                          <span className="font-mono px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-xs font-semibold text-slate-800 dark:text-slate-200">
-                            {g.group_code}
+                          <span className="font-mono px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1">
+                            {g.group_code?.includes('-S2-') ? (
+                              <span className="text-[10px] px-1 rounded bg-purple-200 dark:bg-purple-900 text-purple-800 dark:text-purple-200 font-bold">🌸 Sem 2</span>
+                            ) : (
+                              <span className="text-[10px] px-1 rounded bg-amber-200 dark:bg-amber-900 text-amber-800 dark:text-amber-200 font-bold">🍂 Sem 1</span>
+                            )}
+                            <span>{g.group_code}</span>
                           </span>
                           {g.status === 'SUBMITTED' ? (
                             <Badge variant="success" size="sm">Submitted</Badge>
@@ -1009,16 +1177,26 @@ const AssignmentsPage = () => {
                               </div>
                             </div>
 
-                            <a
-                              href={g.submission_file_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              download={g.submission_file_name || true}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm transition-all shrink-0"
-                            >
-                              <Download className="w-3.5 h-3.5" />
-                              <span>Download / Open Document</span>
-                            </a>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => handleViewAttachment(`/teachers/assignments/submissions/${g.id}/view`, `/teachers/assignments/submissions/${g.id}/download`, g.submission_file_name || 'submission.pdf', `sub-view-${g.id}`)}
+                                disabled={viewingId === `sub-view-${g.id}`}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white dark:bg-slate-800 border border-emerald-200 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 text-xs font-bold shadow-xs hover:bg-emerald-50 transition-all disabled:opacity-50"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                                <span>{viewingId === `sub-view-${g.id}` ? 'Opening...' : 'View'}</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadFile(`/teachers/assignments/submissions/${g.id}/download`, g.submission_file_name || 'submission-document', `sub-dl-${g.id}`)}
+                                disabled={downloadingId === `sub-dl-${g.id}`}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm transition-all disabled:opacity-50"
+                              >
+                                <Download className={`w-3.5 h-3.5 ${downloadingId === `sub-dl-${g.id}` ? 'animate-bounce' : ''}`} />
+                                <span>{downloadingId === `sub-dl-${g.id}` ? 'Downloading...' : 'Download'}</span>
+                              </button>
+                            </div>
                           </div>
                         )}
 

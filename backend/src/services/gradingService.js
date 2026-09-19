@@ -28,6 +28,7 @@ const propagateGroupScore = async ({ groupCode, groupScore, teacherDbId, userId 
     // 1. Fetch group details and related assignment
     const groupRes = await client.query(
       `SELECT g.id, g.group_code, g.group_name, a.id as assignment_id, a.title, a.max_score,
+              COALESCE(a.semester, 1) as semester,
               ta.teacher_id, ta.subject_id, ta.section_id, ta.academic_year_id
        FROM assignment_groups g
        JOIN assignments a ON g.assignment_id = a.id
@@ -41,6 +42,7 @@ const propagateGroupScore = async ({ groupCode, groupScore, teacherDbId, userId 
     }
 
     const group = groupRes.rows[0];
+    const groupSemester = parseInt(group.semester, 10) || 1;
 
     // Verify teacher authorization
     if (teacherDbId && group.teacher_id !== teacherDbId) {
@@ -83,12 +85,12 @@ const propagateGroupScore = async ({ groupCode, groupScore, teacherDbId, userId 
 
     // 4. Update each member student's grade record atomically
     for (const member of membersRes.rows) {
-      // Check existing grade record
+      // Check existing grade record for this semester
       const existingGrade = await client.query(
         `SELECT id, quiz_score, midterm_score, assignment_score, final_score
          FROM grade_records
-         WHERE student_id = $1 AND subject_id = $2 AND academic_year_id = $3`,
-        [member.student_id, group.subject_id, group.academic_year_id]
+         WHERE student_id = $1 AND subject_id = $2 AND academic_year_id = $3 AND semester = $4`,
+        [member.student_id, group.subject_id, group.academic_year_id, groupSemester]
       );
 
       let quiz = 0;
@@ -107,21 +109,22 @@ const propagateGroupScore = async ({ groupCode, groupScore, teacherDbId, userId 
 
       await client.query(
         `INSERT INTO grade_records
-          (student_id, subject_id, section_id, academic_year_id, quiz_score, midterm_score, assignment_score, final_score, total_score, letter_grade, remarks, updated_by, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
-         ON CONFLICT (student_id, subject_id, academic_year_id)
+          (student_id, subject_id, section_id, academic_year_id, semester, quiz_score, midterm_score, assignment_score, final_score, total_score, letter_grade, remarks, updated_by, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+         ON CONFLICT (student_id, subject_id, academic_year_id, semester)
          DO UPDATE SET
-           assignment_score = $7,
-           total_score = $9,
-           letter_grade = $10,
-           remarks = $11,
-           updated_by = $12,
+           assignment_score = $8,
+           total_score = $10,
+           letter_grade = $11,
+           remarks = $12,
+           updated_by = $13,
            updated_at = NOW()`,
         [
           member.student_id,
           group.subject_id,
           group.section_id,
           group.academic_year_id,
+          groupSemester,
           quiz,
           midterm,
           scoreNum,

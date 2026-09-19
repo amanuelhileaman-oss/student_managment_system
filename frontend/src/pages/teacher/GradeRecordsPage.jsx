@@ -14,6 +14,8 @@ const GradeRecordsPage = () => {
   const [classes, setClasses] = useState([]);
   const [selectedSubjectId, setSelectedSubjectId] = useState(queryParams.get('subjectId') || '');
   const [selectedSectionId, setSelectedSectionId] = useState(queryParams.get('sectionId') || '');
+  const [selectedSemester, setSelectedSemester] = useState(1);
+  const [activeSemester, setActiveSemester] = useState(1);
 
   const [grades, setGrades] = useState([]);
   const [pageLoading, setPageLoading] = useState(true);
@@ -124,9 +126,11 @@ const GradeRecordsPage = () => {
       setSelectedSubjectId(finalSubId);
       setSelectedSectionId(finalSecId);
 
-      // Fetch grades for this class immediately without waiting for re-render
-      const gradesRes = await api.get(`/teachers/grades?subjectId=${finalSubId}&sectionId=${finalSecId}`);
+      // Fetch grades for this class and semester immediately
+      const gradesRes = await api.get(`/teachers/grades?subjectId=${finalSubId}&sectionId=${finalSecId}&semester=${selectedSemester}`);
       setGrades(gradesRes.data?.data || []);
+      if (gradesRes.data?.activeSemester) setActiveSemester(gradesRes.data.activeSemester);
+      if (gradesRes.data?.selectedSemester) setSelectedSemester(gradesRes.data.selectedSemester);
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to retrieve grade book records.');
     } finally {
@@ -145,10 +149,29 @@ const GradeRecordsPage = () => {
     try {
       setGradesLoading(true);
       setError('');
-      const res = await api.get(`/teachers/grades?subjectId=${newSubjectId}&sectionId=${newSectionId}`);
+      const res = await api.get(`/teachers/grades?subjectId=${newSubjectId}&sectionId=${newSectionId}&semester=${selectedSemester}`);
       setGrades(res.data?.data || []);
+      if (res.data?.activeSemester) setActiveSemester(res.data.activeSemester);
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to load grade records for the selected class.');
+    } finally {
+      setGradesLoading(false);
+    }
+  };
+
+  // Switch semester view (Semester 1 <-> Semester 2)
+  const handleSemesterChange = async (newSem) => {
+    if (newSem === selectedSemester) return;
+    setSelectedSemester(newSem);
+    if (!selectedSubjectId || !selectedSectionId) return;
+    try {
+      setGradesLoading(true);
+      setError('');
+      const res = await api.get(`/teachers/grades?subjectId=${selectedSubjectId}&sectionId=${selectedSectionId}&semester=${newSem}`);
+      setGrades(res.data?.data || []);
+      if (res.data?.activeSemester) setActiveSemester(res.data.activeSemester);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to switch semester grade records.');
     } finally {
       setGradesLoading(false);
     }
@@ -160,8 +183,9 @@ const GradeRecordsPage = () => {
     try {
       setGradesLoading(true);
       setError('');
-      const res = await api.get(`/teachers/grades?subjectId=${selectedSubjectId}&sectionId=${selectedSectionId}`);
+      const res = await api.get(`/teachers/grades?subjectId=${selectedSubjectId}&sectionId=${selectedSectionId}&semester=${selectedSemester}`);
       setGrades(res.data?.data || []);
+      if (res.data?.activeSemester) setActiveSemester(res.data.activeSemester);
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to refresh grade records.');
     } finally {
@@ -181,9 +205,10 @@ const GradeRecordsPage = () => {
         studentId: editingStudent.student_id,
         subjectId: parseInt(selectedSubjectId, 10),
         sectionId: parseInt(selectedSectionId, 10),
+        semester: selectedSemester,
         ...scoresForm,
       });
-      setSuccessMsg(`Grade successfully recorded for ${editingStudent.first_name} ${editingStudent.last_name}.`);
+      setSuccessMsg(`Grade successfully recorded for ${editingStudent.first_name} ${editingStudent.last_name} (Semester ${selectedSemester}).`);
       setEditingStudent(null);
       await refreshCurrentGrades();
     } catch (err) {
@@ -293,14 +318,15 @@ const GradeRecordsPage = () => {
         studentId: row.student_id,
         subjectId: parseInt(selectedSubjectId, 10),
         sectionId: parseInt(selectedSectionId, 10),
+        semester: selectedSemester,
         quizScore: row.quiz_score !== null && row.quiz_score !== undefined ? row.quiz_score : 0,
         midtermScore: row.midterm_score !== null && row.midterm_score !== undefined ? row.midterm_score : 0,
         assignmentScore: score,
         finalScore: row.final_score !== null && row.final_score !== undefined ? row.final_score : 0,
-        remarks: row.remarks || `Imported score from group ${row.group_code}`,
+        remarks: row.remarks || `Imported score from group ${row.group_code} (Sem ${selectedSemester})`,
       });
 
-      setSuccessMsg(`✓ Imported group score (${score} pts) from ${row.group_code} for ${row.first_name} ${row.last_name}!`);
+      setSuccessMsg(`✓ Imported group score (${score} pts) from ${row.group_code} for ${row.first_name} ${row.last_name} (Semester ${selectedSemester})!`);
       await refreshCurrentGrades();
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to import group score for student.');
@@ -342,6 +368,7 @@ const GradeRecordsPage = () => {
       const res = await api.post('/teachers/grades/sync-groups', {
         subjectId: parseInt(selectedSubjectId, 10),
         sectionId: parseInt(selectedSectionId, 10),
+        semester: parseInt(selectedSemester, 10) || 1,
       });
       setSuccessMsg(res.data.message || 'Group scores synchronized successfully into grade records.');
       await refreshCurrentGrades();
@@ -369,7 +396,39 @@ const GradeRecordsPage = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {/* Semester Selector Pill */}
+          <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
+            <button
+              type="button"
+              onClick={() => handleSemesterChange(1)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                selectedSemester === 1
+                  ? 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-400 shadow-sm border border-slate-200/80 dark:border-slate-800'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+              }`}
+            >
+              <span>🍂 Semester 1</span>
+              {activeSemester === 1 && (
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title="Active Institutional Semester" />
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSemesterChange(2)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                selectedSemester === 2
+                  ? 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-400 shadow-sm border border-slate-200/80 dark:border-slate-800'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+              }`}
+            >
+              <span>🌸 Semester 2</span>
+              {activeSemester === 2 && (
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title="Active Institutional Semester" />
+              )}
+            </button>
+          </div>
+
           {classes.length > 0 && (
             <button
               type="button"
@@ -539,8 +598,12 @@ const GradeRecordsPage = () => {
                           {row.group_code && (
                             <div className="flex flex-col items-center gap-1 mt-1">
                               <span
-                                className="inline-block px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/60 text-[10px] font-mono text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60"
-                                title={`Group Code: ${row.group_code} (${row.group_name})`}
+                                className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-mono border ${
+                                  row.group_code.includes('-S2-')
+                                    ? 'bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border-purple-200/60 dark:border-purple-800/60'
+                                    : 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-200/60 dark:border-amber-800/60'
+                                }`}
+                                title={`Group Code: ${row.group_code} (${row.group_name || 'Group Project'})`}
                               >
                                 {row.group_code}
                               </span>
@@ -661,7 +724,7 @@ const GradeRecordsPage = () => {
       <Modal
         isOpen={!!editingStudent}
         onClose={() => setEditingStudent(null)}
-        title={`Enter Assessment Marks: ${editingStudent?.first_name} ${editingStudent?.last_name}`}
+        title={`Enter Assessment Marks: ${editingStudent?.first_name} ${editingStudent?.last_name} (Semester ${selectedSemester})`}
       >
         <form onSubmit={handleSaveGrade} className="space-y-4">
           <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-300">

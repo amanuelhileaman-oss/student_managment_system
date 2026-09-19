@@ -424,9 +424,9 @@ async function seedDatabase() {
         const subId = subjectMap[g10Subs[i]];
         const score = natnaelScores[i];
         await client.query(
-          `INSERT INTO grade_records (student_id, subject_id, section_id, academic_year_id, quiz_score, midterm_score, assignment_score, final_score, total_score, letter_grade, remarks)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'Excellent performance')
-           ON CONFLICT (student_id, subject_id, academic_year_id) DO UPDATE SET total_score = $9`,
+          `INSERT INTO grade_records (student_id, subject_id, section_id, academic_year_id, semester, quiz_score, midterm_score, assignment_score, final_score, total_score, letter_grade, remarks)
+           VALUES ($1, $2, $3, $4, 1, $5, $6, $7, $8, $9, $10, 'Excellent performance')
+           ON CONFLICT (student_id, subject_id, academic_year_id, semester) DO UPDATE SET total_score = $9`,
           [
             student3Id,
             subId,
@@ -477,9 +477,9 @@ async function seedDatabase() {
         const subId = subjectMap[bethSubs[i]];
         const score = bethScores[i];
         await client.query(
-          `INSERT INTO grade_records (student_id, subject_id, section_id, academic_year_id, quiz_score, midterm_score, assignment_score, final_score, total_score, letter_grade, remarks)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'Eligible for Social Stream')
-           ON CONFLICT (student_id, subject_id, academic_year_id) DO UPDATE SET total_score = $9`,
+          `INSERT INTO grade_records (student_id, subject_id, section_id, academic_year_id, semester, quiz_score, midterm_score, assignment_score, final_score, total_score, letter_grade, remarks)
+           VALUES ($1, $2, $3, $4, 1, $5, $6, $7, $8, $9, $10, 'Eligible for Social Stream')
+           ON CONFLICT (student_id, subject_id, academic_year_id, semester) DO UPDATE SET total_score = $9`,
           [
             student4Id,
             subId,
@@ -525,9 +525,9 @@ async function seedDatabase() {
 
       // Record Grade for Dawit in Math-9
       await client.query(
-        `INSERT INTO grade_records (student_id, subject_id, section_id, academic_year_id, quiz_score, midterm_score, assignment_score, final_score, total_score, letter_grade, remarks)
-         VALUES ($1, $2, $3, $4, 9.5, 27.5, 18.0, 36.0, 91.0, 'A+', 'Outstanding collaborative group work')
-         ON CONFLICT (student_id, subject_id, academic_year_id) DO UPDATE SET
+        `INSERT INTO grade_records (student_id, subject_id, section_id, academic_year_id, semester, quiz_score, midterm_score, assignment_score, final_score, total_score, letter_grade, remarks)
+         VALUES ($1, $2, $3, $4, 1, 9.5, 27.5, 18.0, 36.0, 91.0, 'A+', 'Outstanding collaborative group work')
+         ON CONFLICT (student_id, subject_id, academic_year_id, semester) DO UPDATE SET
            assignment_score = 18.0, total_score = 91.0, letter_grade = 'A+'`,
         [student1Id, subMath9, g9SecA, currentYearId]
       );

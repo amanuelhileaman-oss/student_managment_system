@@ -25,6 +25,7 @@ import {
   Download,
   Trash2,
   ArrowLeft,
+  Lock,
 } from 'lucide-react';
 
 const StudentAssignmentsPage = () => {
@@ -45,6 +46,7 @@ const StudentAssignmentsPage = () => {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [modalError, setModalError] = useState('');
   const [modalSuccess, setModalSuccess] = useState('');
+  const [semesterFilter, setSemesterFilter] = useState('ALL');
 
   // Download Progress State
   const [downloadProgress, setDownloadProgress] = useState({});
@@ -260,10 +262,65 @@ const StudentAssignmentsPage = () => {
       {error && <Alert type="error" title="Notice" message={error} onClose={() => setError('')} />}
       {successMsg && <Alert type="success" title="Success" message={successMsg} onClose={() => setSuccessMsg('')} />}
 
+      {/* Semester Filter Tabs */}
+      <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-3 overflow-x-auto">
+        <button
+          type="button"
+          onClick={() => setSemesterFilter('ALL')}
+          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 ${
+            semesterFilter === 'ALL'
+              ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 shadow-xs'
+              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+          }`}
+        >
+          All Assignments ({assignments.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => setSemesterFilter('1')}
+          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
+            semesterFilter === '1'
+              ? 'bg-amber-600 text-white shadow-xs'
+              : 'text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40'
+          }`}
+        >
+          <span>🍂 Semester 1</span>
+          <span className="text-[11px] opacity-80">
+            ({assignments.filter((a) => Number(a.semester) === 1).length})
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setSemesterFilter('2')}
+          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
+            semesterFilter === '2'
+              ? 'bg-purple-600 text-white shadow-xs'
+              : 'text-purple-700 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-950/40'
+          }`}
+        >
+          <span>🌸 Semester 2</span>
+          <span className="text-[11px] opacity-80">
+            ({assignments.filter((a) => Number(a.semester) === 2).length})
+          </span>
+        </button>
+      </div>
+
       {/* Assignment Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-        {assignments.length > 0 ? (
-          assignments.map((a) => {
+        {assignments
+          .filter((a) => {
+            if (semesterFilter === '1') return Number(a.semester) === 1;
+            if (semesterFilter === '2') return Number(a.semester) === 2;
+            return true;
+          })
+          .length > 0 ? (
+          assignments
+            .filter((a) => {
+              if (semesterFilter === '1') return Number(a.semester) === 1;
+              if (semesterFilter === '2') return Number(a.semester) === 2;
+              return true;
+            })
+            .map((a) => {
             const isGroup = a.assignment_type === 'GROUP';
             const remaining = getTimeRemaining(a.due_date);
             const isSubmitted = a.group_status === 'SUBMITTED';
@@ -278,9 +335,20 @@ const StudentAssignmentsPage = () => {
                 <div>
                   {/* Top Bar: Badges */}
                   <div className="flex items-center justify-between gap-2 mb-2.5">
-                    <Badge variant={isGroup ? 'primary' : 'neutral'} size="sm">
-                      {isGroup ? 'Collaborative Group' : 'Individual'}
-                    </Badge>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <Badge variant={isGroup ? 'primary' : 'neutral'} size="sm">
+                        {isGroup ? 'Collaborative Group' : 'Individual'}
+                      </Badge>
+                      {Number(a.semester) === 2 ? (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-purple-100 dark:bg-purple-950/80 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
+                          🌸 Sem 2
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                          🍂 Sem 1
+                        </span>
+                      )}
+                    </div>
                     <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
                       Max: <strong className="text-slate-800 dark:text-slate-200">{a.max_score}</strong> pts
                     </span>
@@ -578,21 +646,32 @@ const StudentAssignmentsPage = () => {
           )}
 
           <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-xs text-emerald-800 dark:text-emerald-300 space-y-1">
-            <div className="font-semibold flex items-center gap-1.5">
-              {selectedAssignForSubmit?.assignment_type === 'GROUP' ? (
-                <>
-                  <Users className="w-4 h-4 text-emerald-600" />
-                  {selectedAssignForSubmit?.group_code ? (
-                    <span>Submitting for {selectedAssignForSubmit?.group_name} ({selectedAssignForSubmit?.group_code})</span>
-                  ) : (
-                    <span>Collaborative Group Submission</span>
-                  )}
-                </>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="font-semibold flex items-center gap-1.5 min-w-0">
+                {selectedAssignForSubmit?.assignment_type === 'GROUP' ? (
+                  <>
+                    <Users className="w-4 h-4 text-emerald-600 shrink-0" />
+                    {selectedAssignForSubmit?.group_code ? (
+                      <span className="truncate">Submitting for {selectedAssignForSubmit?.group_name} ({selectedAssignForSubmit?.group_code})</span>
+                    ) : (
+                      <span>Collaborative Group Submission</span>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <FileCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>Individual Coursework Submission</span>
+                  </>
+                )}
+              </div>
+              {Number(selectedAssignForSubmit?.semester) === 2 ? (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 shrink-0">
+                  🌸 Semester 2
+                </span>
               ) : (
-                <>
-                  <FileCheck className="w-4 h-4 text-emerald-600" />
-                  <span>Individual Coursework Submission</span>
-                </>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 shrink-0">
+                  🍂 Semester 1
+                </span>
               )}
             </div>
             <p className="text-[11px] text-emerald-700/80 dark:text-emerald-300/80">
@@ -659,6 +738,31 @@ const StudentAssignmentsPage = () => {
             </div>
           )}
 
+          {/* Pre-assigned Group Display */}
+          {selectedAssignForSubmit?.assignment_type === 'GROUP' && selectedAssignForSubmit?.group_code && (
+            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="p-2 rounded-lg bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 shrink-0">
+                  <Users className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5 flex-wrap">
+                    <span className="truncate">{selectedAssignForSubmit.group_name || 'Assigned Project Team'}</span>
+                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                      <Lock className="w-2.5 h-2.5" /> Assigned
+                    </span>
+                  </div>
+                  <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400 mt-0.5">
+                    Group Code: <span className="font-bold text-slate-700 dark:text-slate-200">{selectedAssignForSubmit.group_code}</span>
+                  </div>
+                </div>
+              </div>
+              <span className="text-[10px] text-slate-400 italic shrink-0 hidden sm:inline">
+                Single group per assignment
+              </span>
+            </div>
+          )}
+
           {/* Group Code Input if not pre-linked and it is a GROUP assignment */}
           {selectedAssignForSubmit?.assignment_type === 'GROUP' && !selectedAssignForSubmit?.group_code && (
             <div>
@@ -674,7 +778,7 @@ const StudentAssignmentsPage = () => {
                 className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-mono uppercase text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
               />
               <p className="text-[11px] text-slate-400 mt-1">
-                Enter your team's Group Code provided by your instructor or teammates.
+                Enter your team's Group Code provided by your instructor or teammates. You can only join one group for this assignment.
               </p>
             </div>
           )}

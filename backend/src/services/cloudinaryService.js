@@ -125,6 +125,8 @@ const uploadBuffer = (buffer, options = {}) => {
       {
         folder,
         resource_type: effectiveResourceType,
+        type: 'upload',
+        access_mode: 'public',
         use_filename: true,
         unique_filename: true,
         filename_override: safeFilenameOverride,

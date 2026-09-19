@@ -101,13 +101,13 @@ const checkStreamEligibility = async (studentDbId, targetGradeLevel, streamCode)
   const minAvg = parseFloat(min_overall_average);
   const requiredSubjects = required_subjects_config.subjects || {};
 
-  // Retrieve official Grade 10 results for student
+  // Retrieve official Grade 10 results for student across all semesters
   const gradesRes = await query(
-    `SELECT gr.total_score, s.name as subject_name
+    `SELECT gr.total_score, gr.semester, s.id as subject_id, s.name as subject_name
      FROM grade_records gr
      JOIN subjects s ON gr.subject_id = s.id
      JOIN sections sec ON gr.section_id = sec.id
-     WHERE gr.student_id = $1 AND sec.grade_level = 10`,
+     WHERE gr.student_id = $1 AND sec.grade_level = 10 AND gr.total_score IS NOT NULL`,
     [studentDbId]
   );
 
@@ -119,9 +119,36 @@ const checkStreamEligibility = async (studentDbId, targetGradeLevel, streamCode)
     };
   }
 
-  // Calculate student Grade 10 overall GPA
-  const totalSum = gradesRes.rows.reduce((acc, row) => acc + parseFloat(row.total_score || 0), 0);
-  const studentGpa = parseFloat((totalSum / gradesRes.rows.length).toFixed(2));
+  // Group by subject to compute annual composite (Sem 1 + Sem 2) / 2
+  const subjectAggMap = {};
+  gradesRes.rows.forEach((r) => {
+    if (!subjectAggMap[r.subject_id]) {
+      subjectAggMap[r.subject_id] = {
+        name: r.subject_name.trim().toLowerCase(),
+        semesters: {},
+      };
+    }
+    const sem = r.semester || 1;
+    subjectAggMap[r.subject_id].semesters[sem] = parseFloat(r.total_score || 0);
+  });
+
+  const subjectAverages = Object.values(subjectAggMap).map((sub) => {
+    const s1 = sub.semesters[1];
+    const s2 = sub.semesters[2];
+    let annual = 0;
+    if (s1 !== undefined && s2 !== undefined) {
+      annual = parseFloat(((s1 + s2) / 2).toFixed(2));
+    } else if (s1 !== undefined) {
+      annual = s1;
+    } else if (s2 !== undefined) {
+      annual = s2;
+    }
+    return { name: sub.name, score: annual };
+  });
+
+  // Calculate student Grade 10 overall composite average
+  const totalSum = subjectAverages.reduce((acc, row) => acc + row.score, 0);
+  const studentGpa = parseFloat((totalSum / subjectAverages.length).toFixed(2));
 
   const reasons = [];
 
@@ -131,8 +158,8 @@ const checkStreamEligibility = async (studentDbId, targetGradeLevel, streamCode)
 
   // Check required subject thresholds
   const studentSubjectScores = {};
-  gradesRes.rows.forEach((r) => {
-    studentSubjectScores[r.subject_name.trim().toLowerCase()] = parseFloat(r.total_score);
+  subjectAverages.forEach((sub) => {
+    studentSubjectScores[sub.name] = sub.score;
   });
 
   for (const [reqSubject, reqMinScore] of Object.entries(requiredSubjects)) {
@@ -147,49 +174,46 @@ const checkStreamEligibility = async (studentDbId, targetGradeLevel, streamCode)
   if (reasons.length > 0) {
     return {
       eligible: false,
-      message: 'You must fulfill the previous grade requirements before selecting this stream.',
+      message: `You do not meet the qualification criteria for ${stream.name}.`,
       reasons,
       studentGpa,
       minRequiredGpa: minAvg,
+      subjectScores: studentSubjectScores,
     };
   }
 
   return {
     eligible: true,
-    message: `Qualified for ${stream.name}.`,
+    message: `Qualified for ${stream.name} with an overall GPA of ${studentGpa}%.`,
     studentGpa,
-    streamName: stream.name,
+    minRequiredGpa: minAvg,
+    subjectScores: studentSubjectScores,
   };
 };
 
 /**
- * Check linear grade progression and prohibit grade jumping
- * @param {number} currentGradeLevel - Current student grade level in database (e.g. 9)
- * @param {number} targetGradeLevel - Target grade level student is attempting to enroll into (e.g. 10)
+ * Verify linear grade progression (Grade 9 -> 10, 10 -> 11, 11 -> 12)
  */
 const checkGradeProgression = (currentGradeLevel, targetGradeLevel) => {
   if (!currentGradeLevel) {
-    // New enrollment must enter Grade 9
-    if (targetGradeLevel !== 9) {
-      return {
-        allowed: false,
-        message: 'New high school students must enroll in Grade 9.',
-      };
-    }
-    return { allowed: true };
+    if (targetGradeLevel === 9) return { allowed: true };
+    return {
+      allowed: false,
+      message: 'New students must start by enrolling in Grade 9 with verified Grade 8 credentials.',
+    };
   }
 
   if (targetGradeLevel <= currentGradeLevel) {
     return {
       allowed: false,
-      message: `You are already enrolled or completed Grade ${currentGradeLevel}. You cannot enroll into Grade ${targetGradeLevel}.`,
+      message: `Cannot enroll in Grade ${targetGradeLevel}. You are already enrolled in or have completed Grade ${currentGradeLevel}.`,
     };
   }
 
-  if (targetGradeLevel !== currentGradeLevel + 1) {
+  if (targetGradeLevel > currentGradeLevel + 1) {
     return {
       allowed: false,
-      message: `Please fulfill the previous grade requirements before proceeding to Grade ${targetGradeLevel}. Grade jumping is strictly prohibited. You must complete Grade ${currentGradeLevel + 1} first.`,
+      message: `Direct skip from Grade ${currentGradeLevel} to Grade ${targetGradeLevel} is not permitted. Academic progression must be sequential.`,
     };
   }
 
@@ -198,25 +222,27 @@ const checkGradeProgression = (currentGradeLevel, targetGradeLevel) => {
 
 /**
  * Verify student's academic results for promotion to next grade level
- * Supports Grade 9 -> 10, Grade 10 -> 11, and Grade 11 -> 12
- * Computes average across all delivered subjects from teachers: (sub_1 + sub_2 + ... + sub_n) / total subjects
+ * Evaluates both Semester 1 and Semester 2 records
+ * Annual Composite = (Semester 1 + Semester 2) / 2
+ * Standard Promotion: Annual Composite Average >= 50.0% and <= 2 failed subjects (< 50%)
  * @param {number} studentDbId - Database primary key of the student
- * @param {number} sourceGradeLevel - 9, 10, or 11
+ * @param {number} sourceGradeLevel - 9, 10, 11, or 12
+ * @param {object} options - Optional controls (e.g. allowSingleSemester)
  */
-const verifyGradeResultsForPromotion = async (studentDbId, sourceGradeLevel) => {
+const verifyGradeResultsForPromotion = async (studentDbId, sourceGradeLevel, options = {}) => {
   const targetGradeLevel = sourceGradeLevel + 1;
 
   const res = await query(
     `SELECT gr.id, gr.quiz_score, gr.midterm_score, gr.assignment_score, gr.final_score,
-            gr.total_score, gr.letter_grade, gr.remarks,
-            s.name as subject_name, s.code as subject_code, s.credit_hours,
+            gr.total_score, gr.letter_grade, gr.remarks, gr.semester,
+            s.id as subject_id, s.name as subject_name, s.code as subject_code, s.credit_hours,
             COALESCE(u_up.first_name || ' ' || u_up.last_name, 'Subject Instructor') as teacher_name
      FROM grade_records gr
      JOIN subjects s ON gr.subject_id = s.id
      JOIN sections sec ON gr.section_id = sec.id
      LEFT JOIN users u_up ON gr.updated_by = u_up.id
      WHERE gr.student_id = $1 AND sec.grade_level = $2 AND gr.total_score IS NOT NULL
-     ORDER BY s.name ASC`,
+     ORDER BY s.name ASC, gr.semester ASC`,
     [studentDbId, sourceGradeLevel]
   );
 
@@ -236,31 +262,133 @@ const verifyGradeResultsForPromotion = async (studentDbId, sourceGradeLevel) => 
     };
   }
 
-  const scores = res.rows.map((r) => parseFloat(r.total_score || 0));
-  const sum = scores.reduce((acc, val) => acc + val, 0);
-  const average = parseFloat((sum / scores.length).toFixed(2));
+  // Group by subject_id to align Semester 1 and Semester 2 records
+  const subjectMap = {};
+  res.rows.forEach((r) => {
+    if (!subjectMap[r.subject_id]) {
+      subjectMap[r.subject_id] = {
+        subject_id: r.subject_id,
+        subject_name: r.subject_name,
+        subject_code: r.subject_code,
+        credit_hours: r.credit_hours,
+        teacher_name: r.teacher_name,
+        sem1: null,
+        sem2: null,
+      };
+    }
+    const sem = r.semester || 1;
+    if (sem === 1) subjectMap[r.subject_id].sem1 = r;
+    if (sem === 2) subjectMap[r.subject_id].sem2 = r;
+  });
+
+  const subjects = Object.values(subjectMap).map((sub) => {
+    const s1 = sub.sem1?.total_score != null ? parseFloat(sub.sem1.total_score) : null;
+    const s2 = sub.sem2?.total_score != null ? parseFloat(sub.sem2.total_score) : null;
+    let annualScore = null;
+    if (s1 !== null && s2 !== null) {
+      annualScore = parseFloat(((s1 + s2) / 2).toFixed(2));
+    } else if (s1 !== null) {
+      annualScore = s1;
+    } else if (s2 !== null) {
+      annualScore = s2;
+    }
+    return {
+      ...sub,
+      annualScore,
+      isPassed: annualScore !== null && annualScore >= 50.0,
+    };
+  });
+
+  const sem1Subjects = subjects.filter((s) => s.sem1?.total_score != null);
+  const sem2Subjects = subjects.filter((s) => s.sem2?.total_score != null);
+  const sem1Scores = sem1Subjects.map((s) => parseFloat(s.sem1.total_score));
+  const sem2Scores = sem2Subjects.map((s) => parseFloat(s.sem2.total_score));
+
+  const sem1Average = sem1Scores.length > 0 ? parseFloat((sem1Scores.reduce((a, b) => a + b, 0) / sem1Scores.length).toFixed(2)) : null;
+  const sem2Average = sem2Scores.length > 0 ? parseFloat((sem2Scores.reduce((a, b) => a + b, 0) / sem2Scores.length).toFixed(2)) : null;
+
+  const hasBothSemesters = sem1Average !== null && sem2Average !== null;
+
+  // Check if system requires both semesters
+  if (!hasBothSemesters && !options.allowSingleSemester) {
+    if (sem1Average !== null && sem2Average === null) {
+      return {
+        eligible: false,
+        reason: 'SEMESTER_2_PENDING',
+        sourceGradeLevel,
+        targetGradeLevel,
+        message: `Grade ${sourceGradeLevel} requires completion of both Semester 1 and Semester 2 before promotion. Current Semester 1 average: ${sem1Average}%. Awaiting Semester 2 completion.`,
+        average: sem1Average,
+        sem1Average,
+        sem2Average: null,
+        totalScoreSum: parseFloat(sem1Scores.reduce((a, b) => a + b, 0).toFixed(2)),
+        subjectCount: subjects.length,
+        formula: `Semester 1 Average: ${sem1Average}% (Semester 2 In Progress)`,
+        minRequired: 50.0,
+        subjects,
+      };
+    }
+  }
+
+  // Calculate annual composite average
+  let annualAverage = null;
+  if (hasBothSemesters) {
+    annualAverage = parseFloat(((sem1Average + sem2Average) / 2).toFixed(2));
+  } else if (sem1Average !== null) {
+    annualAverage = sem1Average;
+  } else if (sem2Average !== null) {
+    annualAverage = sem2Average;
+  }
+
+  const failedSubjects = subjects.filter((s) => s.annualScore !== null && s.annualScore < 50.0);
+  const failedSubjectsCount = failedSubjects.length;
   const minPassingScore = 50.0;
+  const maxAllowedFailures = 2;
 
-  const formulaComponents = res.rows.map((r) => `${r.subject_name} (${parseFloat(r.total_score).toFixed(1)})`);
-  const formula = `(${formulaComponents.join(' + ')}) / ${scores.length} = ${average}%`;
+  const formula = hasBothSemesters
+    ? `(Semester 1 Average: ${sem1Average}% + Semester 2 Average: ${sem2Average}%) / 2 = ${annualAverage}%`
+    : `Average: ${annualAverage}%`;
 
-  if (average < minPassingScore) {
+  if (annualAverage < minPassingScore) {
     return {
       eligible: false,
       reason: 'BELOW_CRITERIA',
       sourceGradeLevel,
       targetGradeLevel,
-      message: `Grade ${sourceGradeLevel} result is below the criteria. Please perform your qualification before proceed. (Calculated average: ${average}%, minimum required: ${minPassingScore}%).`,
-      average,
-      totalScoreSum: parseFloat(sum.toFixed(2)),
-      subjectCount: scores.length,
+      message: `Grade ${sourceGradeLevel} annual composite average (${annualAverage}%) is below the minimum required passing average of ${minPassingScore}%.`,
+      average: annualAverage,
+      sem1Average,
+      sem2Average,
+      failedSubjectsCount,
+      totalScoreSum: parseFloat(subjects.reduce((acc, s) => acc + (s.annualScore || 0), 0).toFixed(2)),
+      subjectCount: subjects.length,
       formula,
       minRequired: minPassingScore,
-      subjects: res.rows,
+      subjects,
     };
   }
 
-  // If advancing to Grade 11, evaluate both Natural and Social stream criteria for student comparison
+  if (failedSubjectsCount > maxAllowedFailures) {
+    const failedNames = failedSubjects.map((s) => s.subject_name).join(', ');
+    return {
+      eligible: false,
+      reason: 'TOO_MANY_FAILED_SUBJECTS',
+      sourceGradeLevel,
+      targetGradeLevel,
+      message: `Grade ${sourceGradeLevel} promotion denied: Student failed ${failedSubjectsCount} subjects (${failedNames}). Maximum allowed failed subjects is ${maxAllowedFailures}.`,
+      average: annualAverage,
+      sem1Average,
+      sem2Average,
+      failedSubjectsCount,
+      totalScoreSum: parseFloat(subjects.reduce((acc, s) => acc + (s.annualScore || 0), 0).toFixed(2)),
+      subjectCount: subjects.length,
+      formula,
+      minRequired: minPassingScore,
+      subjects,
+    };
+  }
+
+  // If advancing to Grade 11, evaluate both Natural and Social stream criteria for comparison
   let streamEvaluation = null;
   if (targetGradeLevel === 11) {
     const naturalEval = await checkStreamEligibility(studentDbId, 11, 'NATURAL');
@@ -276,13 +404,16 @@ const verifyGradeResultsForPromotion = async (studentDbId, sourceGradeLevel) => 
     reason: 'PASSED',
     sourceGradeLevel,
     targetGradeLevel,
-    message: `Grade ${sourceGradeLevel} academic criteria fulfilled with an average of ${average}%. Qualified to proceed to Grade ${targetGradeLevel}.`,
-    average,
-    totalScoreSum: parseFloat(sum.toFixed(2)),
-    subjectCount: scores.length,
+    message: `Grade ${sourceGradeLevel} academic criteria fulfilled with an annual composite average of ${annualAverage}% across both semesters. Qualified to proceed to Grade ${targetGradeLevel}.`,
+    average: annualAverage,
+    sem1Average,
+    sem2Average,
+    failedSubjectsCount,
+    totalScoreSum: parseFloat(subjects.reduce((acc, s) => acc + (s.annualScore || 0), 0).toFixed(2)),
+    subjectCount: subjects.length,
     formula,
     minRequired: minPassingScore,
-    subjects: res.rows,
+    subjects,
     streamEvaluation,
   };
 };

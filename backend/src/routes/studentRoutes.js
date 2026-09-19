@@ -27,6 +27,17 @@ router.post('/enroll', studentController.enroll);
 router.get('/results', studentController.getMyResults);
 router.get('/assignments', studentController.getMyAssignments);
 router.post('/assignments/submit', upload.single('file'), studentController.submitGroupAssignment);
+
+// Assignment question document download & preview
+router.get('/assignments/:id/download', studentController.downloadAssignmentFile);
+router.get('/assignments/:id/view', studentController.viewAssignmentFile);
+
+// Submission document download & preview
+router.get('/submissions/:groupId/download', studentController.downloadSubmissionFile);
+router.get('/submissions/:groupId/view', studentController.viewSubmissionFile);
+router.get('/assignments/submissions/:groupId/download', studentController.downloadSubmissionFile);
+router.get('/assignments/submissions/:groupId/view', studentController.viewSubmissionFile);
+
 router.get('/schedule', studentController.getMySchedule);
 
 module.exports = router;

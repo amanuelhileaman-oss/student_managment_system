@@ -2,6 +2,7 @@ const { query, withTransaction } = require('../config/db');
 const { logAudit } = require('../services/auditService');
 const { syncScheduleRoomNumbers } = require('./scheduleController');
 const cloudinaryService = require('../services/cloudinaryService');
+const { verifyGradeResultsForPromotion } = require('../services/eligibilityEngine');
 
 /**
  * Real-time Admin Dashboard Analytics from live database
@@ -1371,8 +1372,8 @@ const getSettings = async (req, res, next) => {
       settingsMap[row.key] = row.value;
     }
 
-    const yearRes = await query('SELECT id, year_name FROM academic_years WHERE is_current = TRUE LIMIT 1');
-    const currentYear = yearRes.rows[0] || { id: 1, year_name: '2026-2027' };
+    const yearRes = await query('SELECT id, year_name, current_semester FROM academic_years WHERE is_current = TRUE LIMIT 1');
+    const currentYear = yearRes.rows[0] || { id: 1, year_name: '2026-2027', current_semester: 1 };
 
     const schoolName = settingsMap['school_name']?.name || 'Addis International High School';
     const defaultCapacity = settingsMap['default_section_capacity']?.capacity !== undefined
@@ -1394,6 +1395,7 @@ const getSettings = async (req, res, next) => {
         schoolName,
         academicYear: currentYear.year_name,
         academicYearId: currentYear.id,
+        currentSemester: Number(currentYear.current_semester || 1),
         defaultSectionCapacity: Number(defaultCapacity),
         minGrade8Gpa: Number(minGrade8Gpa),
         quizWeight: Number(gradingPolicy.quiz_weight),
@@ -1415,6 +1417,7 @@ const updateSettings = async (req, res, next) => {
     const {
       schoolName,
       academicYear,
+      currentSemester,
       defaultSectionCapacity,
       minGrade8Gpa,
       quizWeight,
@@ -1460,6 +1463,11 @@ const updateSettings = async (req, res, next) => {
       });
     }
 
+    const semNum = currentSemester ? parseInt(currentSemester, 10) : null;
+    if (semNum && semNum !== 1 && semNum !== 2) {
+      return res.status(400).json({ success: false, message: 'Academic semester must be 1 or 2.' });
+    }
+
     const updatedData = await withTransaction(async (client) => {
       // 1. Update school name
       await client.query(
@@ -1498,15 +1506,23 @@ const updateSettings = async (req, res, next) => {
         })]
       );
 
-      // 5. Update academic year
-      await client.query(
-        `UPDATE academic_years SET year_name = $1 WHERE is_current = TRUE`,
-        [academicYear.trim()]
-      );
+      // 5. Update academic year and semester
+      if (semNum) {
+        await client.query(
+          `UPDATE academic_years SET year_name = $1, current_semester = $2 WHERE is_current = TRUE`,
+          [academicYear.trim(), semNum]
+        );
+      } else {
+        await client.query(
+          `UPDATE academic_years SET year_name = $1 WHERE is_current = TRUE`,
+          [academicYear.trim()]
+        );
+      }
 
       return {
         schoolName: schoolName.trim(),
         academicYear: academicYear.trim(),
+        currentSemester: semNum || 1,
         defaultSectionCapacity: capacityNum,
         minGrade8Gpa: gpaNum,
         quizWeight: qWeight,
@@ -1534,6 +1550,255 @@ const updateSettings = async (req, res, next) => {
   }
 };
 
+/**
+ * Get active academic year with current semester
+ */
+const getCurrentAcademicYear = async (req, res, next) => {
+  try {
+    const resYear = await query(
+      `SELECT id, year_name, start_date, end_date, is_current, current_semester, created_at
+       FROM academic_years
+       WHERE is_current = TRUE
+       LIMIT 1`
+    );
+    if (resYear.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'No active academic year found.' });
+    }
+    res.json({ success: true, data: resYear.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Switch active academic semester (Semester 1 <-> Semester 2)
+ */
+const updateCurrentSemester = async (req, res, next) => {
+  try {
+    const { semester } = req.body;
+    const semNum = parseInt(semester, 10);
+    if (semNum !== 1 && semNum !== 2) {
+      return res.status(400).json({ success: false, message: 'Semester must be 1 or 2.' });
+    }
+
+    const result = await query(
+      `UPDATE academic_years
+       SET current_semester = $1
+       WHERE is_current = TRUE
+       RETURNING id, year_name, current_semester`,
+      [semNum]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'No active academic year found.' });
+    }
+
+    await logAudit({
+      userId: req.user.id,
+      action: 'UPDATE_SEMESTER',
+      entityType: 'ACADEMIC_YEAR',
+      entityId: result.rows[0].id.toString(),
+      details: { newSemester: semNum },
+    });
+
+    res.json({
+      success: true,
+      message: `Active academic semester successfully switched to Semester ${semNum}.`,
+      data: result.rows[0],
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Process Institutional Year-End Promotion
+ * Evaluates annual composite (Sem 1 + Sem 2) / 2 for all enrolled students
+ * Applies sequential promotion: Grade 9 -> 10, Grade 10 -> 11 (stream selection), Grade 11 -> 12, Grade 12 -> Graduated
+ */
+const processYearEndPromotion = async (req, res, next) => {
+  try {
+    const yRes = await query('SELECT id, year_name, current_semester FROM academic_years WHERE is_current = TRUE LIMIT 1');
+    if (yRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'No active academic year found.' });
+    }
+    const currentYear = yRes.rows[0];
+
+    const stuRes = await query(`
+      SELECT s.id, s.student_id, s.current_grade_level, s.current_stream_id, s.current_section_id,
+             u.first_name, u.last_name, u.email,
+             sec.section_name, sec.grade_level as sec_grade_level,
+             st.code as stream_code, st.name as stream_name
+      FROM students s
+      JOIN users u ON s.user_id = u.id
+      LEFT JOIN sections sec ON s.current_section_id = sec.id
+      LEFT JOIN streams st ON s.current_stream_id = st.id
+      WHERE s.current_grade_level IS NOT NULL AND u.is_active = TRUE
+      ORDER BY s.current_grade_level DESC, s.student_id ASC
+    `);
+
+    const students = stuRes.rows;
+    const promoted = [];
+    const retained = [];
+    const graduated = [];
+
+    const genStreamRes = await query("SELECT id FROM streams WHERE code = 'GENERAL' LIMIT 1");
+    const generalStreamId = genStreamRes.rows[0]?.id;
+
+    for (const student of students) {
+      const currentGrade = student.current_grade_level;
+
+      if (currentGrade === 12) {
+        const evalRes = await verifyGradeResultsForPromotion(student.id, 12);
+        if (evalRes.eligible) {
+          await query(
+            `UPDATE students SET promotion_status = 'GRADUATED', updated_at = NOW() WHERE id = $1`,
+            [student.id]
+          );
+          await query(
+            `UPDATE enrollments SET status = 'COMPLETED' WHERE student_id = $1 AND grade_level = 12 AND status = 'ENROLLED'`,
+            [student.id]
+          );
+          graduated.push({
+            studentId: student.student_id,
+            name: `${student.first_name} ${student.last_name}`,
+            previousGrade: 12,
+            status: 'GRADUATED',
+            average: evalRes.average,
+          });
+        } else {
+          retained.push({
+            studentId: student.student_id,
+            name: `${student.first_name} ${student.last_name}`,
+            gradeLevel: 12,
+            reason: evalRes.message,
+            average: evalRes.average,
+          });
+        }
+        continue;
+      }
+
+      const targetGrade = currentGrade + 1;
+      const evalRes = await verifyGradeResultsForPromotion(student.id, currentGrade);
+
+      if (!evalRes.eligible) {
+        retained.push({
+          studentId: student.student_id,
+          name: `${student.first_name} ${student.last_name}`,
+          gradeLevel: currentGrade,
+          targetGrade,
+          reason: evalRes.message,
+          average: evalRes.average,
+        });
+        continue;
+      }
+
+      let targetStreamId = student.current_stream_id || generalStreamId;
+      if (targetGrade === 10) {
+        targetStreamId = generalStreamId;
+      } else if (targetGrade === 11) {
+        const natEligible = evalRes.streamEvaluation?.NATURAL?.eligible;
+        const socEligible = evalRes.streamEvaluation?.SOCIAL?.eligible;
+
+        const natRes = await query("SELECT id FROM streams WHERE code = 'NATURAL' LIMIT 1");
+        const socRes = await query("SELECT id FROM streams WHERE code = 'SOCIAL' LIMIT 1");
+        const natId = natRes.rows[0]?.id;
+        const socId = socRes.rows[0]?.id;
+
+        if (natEligible) {
+          targetStreamId = natId;
+        } else if (socEligible) {
+          targetStreamId = socId;
+        } else {
+          targetStreamId = socId || natId;
+        }
+      }
+
+      const secRes = await query(`
+        SELECT s.id, s.section_name, s.capacity,
+               COUNT(e.id) as current_enrolled
+        FROM sections s
+        LEFT JOIN enrollments e ON s.id = e.section_id AND e.status = 'ENROLLED'
+        WHERE s.grade_level = $1 AND (s.stream_id = $2 OR s.stream_id IS NULL) AND s.is_active = TRUE
+        GROUP BY s.id, s.section_name, s.capacity
+        ORDER BY s.section_name ASC
+      `, [targetGrade, targetStreamId]);
+
+      const availableSec = secRes.rows.find(s => parseInt(s.current_enrolled, 10) < s.capacity) || secRes.rows[0];
+
+      if (!availableSec) {
+        retained.push({
+          studentId: student.student_id,
+          name: `${student.first_name} ${student.last_name}`,
+          gradeLevel: currentGrade,
+          targetGrade,
+          reason: `No active section found for Grade ${targetGrade}.`,
+        });
+        continue;
+      }
+
+      await query(
+        `UPDATE enrollments SET status = 'COMPLETED' WHERE student_id = $1 AND grade_level = $2 AND status = 'ENROLLED'`,
+        [student.id, currentGrade]
+      );
+
+      await query(
+        `INSERT INTO enrollments (student_id, section_id, grade_level, stream_id, academic_year_id, status)
+         VALUES ($1, $2, $3, $4, $5, 'ENROLLED')
+         ON CONFLICT (student_id, academic_year_id, grade_level)
+         DO UPDATE SET section_id = $2, stream_id = $4, status = 'ENROLLED'`,
+        [student.id, availableSec.id, targetGrade, targetStreamId, currentYear.id]
+      );
+
+      await query(
+        `UPDATE students
+         SET current_grade_level = $1, current_section_id = $2, current_stream_id = $3,
+             promotion_status = 'PROMOTED', updated_at = NOW()
+         WHERE id = $4`,
+        [targetGrade, availableSec.id, targetStreamId, student.id]
+      );
+
+      promoted.push({
+        studentId: student.student_id,
+        name: `${student.first_name} ${student.last_name}`,
+        previousGrade: currentGrade,
+        newGrade: targetGrade,
+        section: availableSec.section_name,
+        average: evalRes.average,
+      });
+    }
+
+    await logAudit({
+      userId: req.user.id,
+      action: 'PROCESS_YEAR_END_PROMOTION',
+      entityType: 'PROMOTION',
+      entityId: currentYear.id.toString(),
+      details: {
+        totalEvaluated: students.length,
+        promotedCount: promoted.length,
+        graduatedCount: graduated.length,
+        retainedCount: retained.length,
+      },
+    });
+
+    res.json({
+      success: true,
+      message: `Year-end promotion complete: ${promoted.length} promoted, ${graduated.length} graduated, ${retained.length} retained or awaiting results.`,
+      data: {
+        totalEvaluated: students.length,
+        totalPromoted: promoted.length,
+        totalGraduated: graduated.length,
+        totalRetained: retained.length,
+        promoted,
+        graduated,
+        retained,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getAnalytics,
   getUsers,
@@ -1555,6 +1820,9 @@ module.exports = {
   createPrerequisite,
   getSettings,
   updateSettings,
+  getCurrentAcademicYear,
+  updateCurrentSemester,
+  processYearEndPromotion,
   createSubject,
   updateSubject,
   deleteSubject,

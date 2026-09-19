@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 import Alert from '../../components/common/Alert';
+import Modal from '../../components/common/Modal';
+import Badge from '../../components/common/Badge';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import {
   Settings,
@@ -14,12 +16,18 @@ import {
   Sparkles,
   RefreshCw,
   Sliders,
+  GraduationCap,
+  ArrowRight,
+  ShieldCheck,
+  Check,
+  XCircle,
 } from 'lucide-react';
 
 const SettingsPage = () => {
   const [settings, setSettings] = useState({
     schoolName: '',
     academicYear: '',
+    currentSemester: 1,
     defaultSectionCapacity: 50,
     minGrade8Gpa: 50.0,
     quizWeight: 10,
@@ -30,6 +38,11 @@ const SettingsPage = () => {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [switchingSemester, setSwitchingSemester] = useState(false);
+  const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
+  const [isPromotionModalOpen, setIsPromotionModalOpen] = useState(false);
+  const [runningPromotion, setRunningPromotion] = useState(false);
+  const [promotionResults, setPromotionResults] = useState(null);
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -43,6 +56,7 @@ const SettingsPage = () => {
         setSettings({
           schoolName: res.data.data.schoolName || '',
           academicYear: res.data.data.academicYear || '',
+          currentSemester: res.data.data.currentSemester ?? 1,
           defaultSectionCapacity: res.data.data.defaultSectionCapacity ?? 50,
           minGrade8Gpa: res.data.data.minGrade8Gpa ?? 50.0,
           quizWeight: res.data.data.quizWeight ?? 10,
@@ -55,6 +69,36 @@ const SettingsPage = () => {
       setErrorMsg(err.response?.data?.message || 'Failed to load system settings from server.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSwitchSemester = async (sem) => {
+    try {
+      setSwitchingSemester(true);
+      setErrorMsg('');
+      const res = await api.patch('/admin/academic-years/current/semester', { semester: sem });
+      setSuccessMsg(res.data?.message || `Active semester switched to Semester ${sem}.`);
+      setSettings((prev) => ({ ...prev, currentSemester: sem }));
+    } catch (err) {
+      setErrorMsg(err.response?.data?.message || 'Failed to switch academic semester.');
+    } finally {
+      setSwitchingSemester(false);
+    }
+  };
+
+  const handleRunPromotion = async () => {
+    try {
+      setRunningPromotion(true);
+      setErrorMsg('');
+      const res = await api.post('/admin/promotions/process-year-end');
+      setPromotionResults(res.data?.data);
+      setIsConfirmModalOpen(false);
+      setIsPromotionModalOpen(true);
+      setSuccessMsg(res.data?.message || 'Year-end promotion processed successfully.');
+    } catch (err) {
+      setErrorMsg(err.response?.data?.message || 'Failed to process year-end promotion.');
+    } finally {
+      setRunningPromotion(false);
     }
   };
 
@@ -181,7 +225,7 @@ const SettingsPage = () => {
             <span className="text-[11px] text-slate-400">Institutional Baseline</span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             {/* Field: Official School Name */}
             <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
@@ -201,7 +245,7 @@ const SettingsPage = () => {
             <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5 flex items-center justify-between">
                 <span>Active Academic Year <span className="text-rose-500">*</span></span>
-                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">Editable Calendar</span>
+                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">Calendar</span>
               </label>
               <div className="relative">
                 <input
@@ -213,6 +257,42 @@ const SettingsPage = () => {
                   className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-mono text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-primary-500/50 transition-colors"
                 />
                 <Calendar className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              </div>
+            </div>
+
+            {/* Field: Active Academic Semester */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5 flex items-center justify-between">
+                <span>Active Semester <span className="text-rose-500">*</span></span>
+                <span className="text-[10px] text-primary-600 dark:text-primary-400 font-medium">Session Control</span>
+              </label>
+              <div className="grid grid-cols-2 gap-2 p-1 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl">
+                <button
+                  type="button"
+                  disabled={switchingSemester}
+                  onClick={() => handleSwitchSemester(1)}
+                  className={`py-2 px-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                    settings.currentSemester === 1
+                      ? 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-400 shadow-sm border border-slate-200 dark:border-slate-700'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                  }`}
+                >
+                  <span>🍂 Sem 1</span>
+                  {settings.currentSemester === 1 && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />}
+                </button>
+                <button
+                  type="button"
+                  disabled={switchingSemester}
+                  onClick={() => handleSwitchSemester(2)}
+                  className={`py-2 px-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                    settings.currentSemester === 2
+                      ? 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-400 shadow-sm border border-slate-200 dark:border-slate-700'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                  }`}
+                >
+                  <span>🌸 Sem 2</span>
+                  {settings.currentSemester === 2 && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />}
+                </button>
               </div>
             </div>
           </div>
@@ -441,6 +521,53 @@ const SettingsPage = () => {
           </div>
         </div>
 
+        {/* ========================================================================= */}
+        {/* CARD 3: TWO-SEMESTER PROGRESSION & YEAR-END PROMOTION ENGINE              */}
+        {/* ========================================================================= */}
+        <div className="p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
+            <div>
+              <h3 className="font-bold text-base text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                <GraduationCap className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                Year-End Academic Promotion Engine (Two-Semester System)
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Evaluates annual composite scores across Semester 1 and Semester 2 for sequential grade advancement.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsConfirmModalOpen(true)}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white text-xs font-semibold shadow-sm transition-all shrink-0"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              Run Year-End Promotion Wizard
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800 text-xs space-y-1">
+              <span className="font-bold text-slate-700 dark:text-slate-300 block">1. Evaluation Standard</span>
+              <p className="text-slate-500 dark:text-slate-400">
+                Annual Composite = (Semester 1 Average + Semester 2 Average) ÷ 2. Requires both semesters completion.
+              </p>
+            </div>
+            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800 text-xs space-y-1">
+              <span className="font-bold text-slate-700 dark:text-slate-300 block">2. Promotion Threshold</span>
+              <p className="text-slate-500 dark:text-slate-400">
+                Minimum passing composite average of <strong>50.0%</strong> and maximum <strong>2 failed subjects (&lt; 50%)</strong> allowed.
+              </p>
+            </div>
+            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800 text-xs space-y-1">
+              <span className="font-bold text-slate-700 dark:text-slate-300 block">3. Sequential Advancement</span>
+              <p className="text-slate-500 dark:text-slate-400">
+                Grade 9 ➔ 10 (General), Grade 10 ➔ 11 (Natural/Social stream evaluation), Grade 11 ➔ 12, Grade 12 ➔ Graduated.
+              </p>
+            </div>
+          </div>
+        </div>
+
         {/* Action Button */}
         <div className="flex items-center justify-end gap-3 pt-2">
           <button
@@ -462,6 +589,160 @@ const SettingsPage = () => {
           </button>
         </div>
       </form>
+
+      {/* Confirmation Modal before running promotion */}
+      <Modal
+        isOpen={isConfirmModalOpen}
+        onClose={() => setIsConfirmModalOpen(false)}
+        title="Execute Institutional Year-End Promotion"
+      >
+        <div className="space-y-4 text-xs text-slate-600 dark:text-slate-300">
+          <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200 flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" />
+            <div>
+              <span className="font-bold block">Academic Progression Review</span>
+              This automated wizard will evaluate annual composite marks across both Semester 1 and Semester 2 for all enrolled students in {settings.academicYear}.
+            </div>
+          </div>
+
+          <ul className="space-y-1.5 list-disc pl-5">
+            <li>Students with annual average &ge; 50% and &le; 2 failed subjects will be promoted to the sequential grade level.</li>
+            <li>Grade 10 students will be evaluated and assigned to qualified academic streams (Natural Science or Social Science).</li>
+            <li>Grade 12 qualified students will be marked as officially <strong>GRADUATED</strong>.</li>
+            <li>New enrollment records will be created, and previous enrollments will be marked as <strong>COMPLETED</strong>.</li>
+          </ul>
+
+          <div className="pt-3 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setIsConfirmModalOpen(false)}
+              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={runningPromotion}
+              onClick={handleRunPromotion}
+              className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold disabled:opacity-50 transition-colors flex items-center gap-1.5"
+            >
+              {runningPromotion ? (
+                <>
+                  <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  <span>Evaluating Students...</span>
+                </>
+              ) : (
+                <>
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Confirm & Run Promotion</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Promotion Results Modal */}
+      <Modal
+        isOpen={isPromotionModalOpen}
+        onClose={() => setIsPromotionModalOpen(false)}
+        title="Year-End Promotion Results & Audit"
+      >
+        <div className="space-y-4 text-xs">
+          <div className="grid grid-cols-3 gap-3">
+            <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-center">
+              <span className="text-emerald-600 dark:text-emerald-400 font-bold text-lg block">
+                {promotionResults?.totalPromoted || 0}
+              </span>
+              <span className="text-slate-600 dark:text-slate-400 font-medium">Promoted</span>
+            </div>
+            <div className="p-3 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 text-center">
+              <span className="text-blue-600 dark:text-blue-400 font-bold text-lg block">
+                {promotionResults?.totalGraduated || 0}
+              </span>
+              <span className="text-slate-600 dark:text-slate-400 font-medium">Graduated</span>
+            </div>
+            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-center">
+              <span className="text-slate-800 dark:text-slate-200 font-bold text-lg block">
+                {promotionResults?.totalRetained || 0}
+              </span>
+              <span className="text-slate-600 dark:text-slate-400 font-medium">Retained / Pending</span>
+            </div>
+          </div>
+
+          {/* Promoted Students Table */}
+          {promotionResults?.promoted?.length > 0 && (
+            <div className="space-y-1.5">
+              <span className="font-bold text-slate-800 dark:text-slate-200 block">Promoted Students</span>
+              <div className="max-h-48 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-800">
+                <table className="w-full text-left text-[11px]">
+                  <thead className="bg-slate-50 dark:bg-slate-800/80 sticky top-0">
+                    <tr>
+                      <th className="py-2 px-3">Student</th>
+                      <th className="py-2 px-2 text-center">Previous</th>
+                      <th className="py-2 px-2 text-center">New Grade</th>
+                      <th className="py-2 px-2 text-center">Section</th>
+                      <th className="py-2 px-2 text-center">Annual Avg</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {promotionResults.promoted.map((p) => (
+                      <tr key={p.studentId}>
+                        <td className="py-1.5 px-3 font-semibold text-slate-900 dark:text-slate-100">
+                          {p.name} <span className="font-mono text-slate-400 font-normal">({p.studentId})</span>
+                        </td>
+                        <td className="py-1.5 px-2 text-center text-slate-500">Grade {p.previousGrade}</td>
+                        <td className="py-1.5 px-2 text-center font-bold text-emerald-600">Grade {p.newGrade}</td>
+                        <td className="py-1.5 px-2 text-center">{p.section}</td>
+                        <td className="py-1.5 px-2 text-center font-mono font-bold">{p.average}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Retained / Pending Students */}
+          {promotionResults?.retained?.length > 0 && (
+            <div className="space-y-1.5">
+              <span className="font-bold text-slate-800 dark:text-slate-200 block">Retained / Awaiting Semester 2</span>
+              <div className="max-h-48 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-800">
+                <table className="w-full text-left text-[11px]">
+                  <thead className="bg-slate-50 dark:bg-slate-800/80 sticky top-0">
+                    <tr>
+                      <th className="py-2 px-3">Student</th>
+                      <th className="py-2 px-2 text-center">Current Grade</th>
+                      <th className="py-2 px-3">Status / Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {promotionResults.retained.map((r) => (
+                      <tr key={r.studentId}>
+                        <td className="py-1.5 px-3 font-semibold text-slate-900 dark:text-slate-100">
+                          {r.name} <span className="font-mono text-slate-400 font-normal">({r.studentId})</span>
+                        </td>
+                        <td className="py-1.5 px-2 text-center text-slate-500">Grade {r.gradeLevel}</td>
+                        <td className="py-1.5 px-3 text-slate-500 italic">{r.reason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          <div className="pt-2 flex justify-end">
+            <button
+              type="button"
+              onClick={() => setIsPromotionModalOpen(false)}
+              className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold transition-colors"
+            >
+              Close Summary
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };

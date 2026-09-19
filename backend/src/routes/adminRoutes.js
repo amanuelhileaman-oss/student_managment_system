@@ -54,6 +54,11 @@ router.get('/schedules/conflicts', scheduleController.getScheduleAudit);
 router.get('/settings', adminController.getSettings);
 router.put('/settings', adminController.updateSettings);
 
+// Academic Year & Semester Control
+router.get('/academic-years/current', adminController.getCurrentAcademicYear);
+router.patch('/academic-years/current/semester', adminController.updateCurrentSemester);
+router.post('/promotions/process-year-end', adminController.processYearEndPromotion);
+
 module.exports = router;
 
 

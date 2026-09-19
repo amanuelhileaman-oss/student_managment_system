@@ -10,6 +10,7 @@ const {
 } = require('../services/eligibilityEngine');
 const { enrollStudent } = require('../services/enrollmentService');
 const { logAudit } = require('../services/auditService');
+const { calculateLetterGrade } = require('../services/gradingService');
 const { processUploadedFile, getAttachmentUrl, streamFileToResponse, getMimeType } = require('../services/cloudinaryService');
 
 /**
@@ -277,13 +278,13 @@ const getMyResults = async (req, res, next) => {
     const student = await getStudentByUserId(req.user.id);
     if (!student) return res.status(404).json({ success: false, message: 'Student profile not found.' });
 
-    // Fetch all grade records for this student
+    // Fetch all grade records for this student across all semesters
     const result = await query(
       `SELECT gr.id, gr.quiz_score, gr.midterm_score, gr.assignment_score, gr.final_score,
-              gr.total_score, gr.letter_grade, gr.remarks, gr.updated_at,
-              s.name as subject_name, s.code as subject_code, s.credit_hours,
+              gr.total_score, gr.letter_grade, gr.remarks, gr.updated_at, gr.semester,
+              s.id as subject_id, s.name as subject_name, s.code as subject_code, s.credit_hours,
               sec.section_name, sec.grade_level,
-              ay.year_name,
+              ay.id as academic_year_id, ay.year_name, ay.current_semester,
               COALESCE(u_up.first_name || ' ' || u_up.last_name, 'Subject Instructor') as teacher_name
        FROM grade_records gr
        JOIN subjects s ON gr.subject_id = s.id
@@ -291,7 +292,7 @@ const getMyResults = async (req, res, next) => {
        JOIN academic_years ay ON gr.academic_year_id = ay.id
        LEFT JOIN users u_up ON gr.updated_by = u_up.id
        WHERE gr.student_id = $1
-       ORDER BY sec.grade_level DESC, s.name ASC`,
+       ORDER BY sec.grade_level DESC, s.name ASC, gr.semester ASC`,
       [student.id]
     );
 
@@ -320,33 +321,120 @@ const getMyResults = async (req, res, next) => {
     distinctGradeLevels.forEach((gl) => {
       const glEnrollment = enrollmentsRes.rows.find((e) => e.grade_level === gl);
       const glGrades = result.rows.filter((g) => g.grade_level === gl);
-      const evaluated = glGrades.filter((r) => r.total_score !== null && r.total_score !== undefined);
-      const subjectCount = evaluated.length;
 
-      let totalScoreSum = 0;
-      evaluated.forEach((r) => {
-        totalScoreSum += parseFloat(r.total_score || 0);
+      // Group by subject_id across semesters
+      const subjectMap = {};
+      glGrades.forEach((g) => {
+        if (!subjectMap[g.subject_id]) {
+          subjectMap[g.subject_id] = {
+            id: g.id,
+            subject_id: g.subject_id,
+            subject_name: g.subject_name,
+            subject_code: g.subject_code,
+            credit_hours: g.credit_hours,
+            teacher_name: g.teacher_name,
+            section_name: g.section_name,
+            grade_level: g.grade_level,
+            sem1: null,
+            sem2: null,
+            annual_total: null,
+            annual_letter: null,
+            is_passed: false,
+            remarks: g.remarks,
+          };
+        }
+        const sem = g.semester || 1;
+        const semRecord = {
+          id: g.id,
+          quiz_score: g.quiz_score !== null ? parseFloat(g.quiz_score) : null,
+          midterm_score: g.midterm_score !== null ? parseFloat(g.midterm_score) : null,
+          assignment_score: g.assignment_score !== null ? parseFloat(g.assignment_score) : null,
+          final_score: g.final_score !== null ? parseFloat(g.final_score) : null,
+          total_score: g.total_score !== null ? parseFloat(g.total_score) : null,
+          letter_grade: g.letter_grade,
+          remarks: g.remarks,
+          updated_at: g.updated_at,
+          teacher_name: g.teacher_name,
+        };
+        if (sem === 1) subjectMap[g.subject_id].sem1 = semRecord;
+        if (sem === 2) subjectMap[g.subject_id].sem2 = semRecord;
       });
 
-      const averageScore = subjectCount > 0 ? parseFloat((totalScoreSum / subjectCount).toFixed(2)) : null;
-      const formulaComponents = evaluated.map(
-        (r) => `${r.subject_name} (${parseFloat(r.total_score).toFixed(1)})`
-      );
-      const formula =
-        subjectCount > 0
-          ? `(${formulaComponents.join(' + ')}) / ${subjectCount} = ${averageScore}%`
-          : 'Awaiting teacher submissions';
+      const formattedGrades = Object.values(subjectMap).map((sub) => {
+        const s1Total = sub.sem1?.total_score != null ? sub.sem1.total_score : null;
+        const s2Total = sub.sem2?.total_score != null ? sub.sem2.total_score : null;
 
+        let annualTotal = null;
+        if (s1Total !== null && s2Total !== null) {
+          annualTotal = parseFloat(((s1Total + s2Total) / 2).toFixed(2));
+        } else if (s1Total !== null) {
+          annualTotal = s1Total;
+        } else if (s2Total !== null) {
+          annualTotal = s2Total;
+        }
+
+        const annualLetter = annualTotal !== null ? calculateLetterGrade(annualTotal) : '—';
+        const isPassed = annualTotal !== null && annualTotal >= 50.0;
+
+        return {
+          ...sub,
+          annual_total: annualTotal,
+          annual_letter: annualLetter,
+          is_passed: isPassed,
+          // Backwards compatibility mappings for flat table fields:
+          quiz_score: sub.sem2?.quiz_score ?? sub.sem1?.quiz_score ?? 0,
+          midterm_score: sub.sem2?.midterm_score ?? sub.sem1?.midterm_score ?? 0,
+          assignment_score: sub.sem2?.assignment_score ?? sub.sem1?.assignment_score ?? 0,
+          final_score: sub.sem2?.final_score ?? sub.sem1?.final_score ?? 0,
+          total_score: annualTotal,
+          letter_grade: annualLetter,
+        };
+      });
+
+      const sem1Scores = formattedGrades.filter((g) => g.sem1?.total_score != null).map((g) => g.sem1.total_score);
+      const sem2Scores = formattedGrades.filter((g) => g.sem2?.total_score != null).map((g) => g.sem2.total_score);
+      const annualScores = formattedGrades.filter((g) => g.annual_total != null).map((g) => g.annual_total);
+
+      const sem1Average = sem1Scores.length > 0 ? parseFloat((sem1Scores.reduce((a, b) => a + b, 0) / sem1Scores.length).toFixed(2)) : null;
+      const sem2Average = sem2Scores.length > 0 ? parseFloat((sem2Scores.reduce((a, b) => a + b, 0) / sem2Scores.length).toFixed(2)) : null;
+
+      let averageScore = null;
+      if (sem1Average !== null && sem2Average !== null) {
+        averageScore = parseFloat(((sem1Average + sem2Average) / 2).toFixed(2));
+      } else if (sem1Average !== null) {
+        averageScore = sem1Average;
+      } else if (sem2Average !== null) {
+        averageScore = sem2Average;
+      }
+
+      const totalScoreSum = parseFloat(annualScores.reduce((a, b) => a + b, 0).toFixed(2));
+      const subjectCount = formattedGrades.length;
+      const failedCount = formattedGrades.filter((g) => g.annual_total !== null && g.annual_total < 50.0).length;
+
+      const hasBothSemesters = sem1Average !== null && sem2Average !== null;
       const isCurrent = (gl === student.current_grade_level);
-      const isQualified = averageScore !== null && averageScore >= 50.0 && subjectCount > 0;
-      const promotionStatus =
-        isQualified
-          ? 'ELIGIBLE_FOR_PROMOTION'
-          : subjectCount > 0
-          ? 'BELOW_CRITERIA'
-          : isCurrent
-          ? 'EVALUATIONS_PENDING'
-          : 'NO_EVALUATIONS';
+
+      let promotionStatus;
+      if (hasBothSemesters) {
+        if (averageScore >= 50.0 && failedCount <= 2) {
+          promotionStatus = isCurrent ? 'ELIGIBLE_FOR_PROMOTION' : 'PROMOTED';
+        } else {
+          promotionStatus = 'BELOW_CRITERIA';
+        }
+      } else if (sem1Average !== null) {
+        promotionStatus = 'SEMESTER_1_COMPLETED';
+      } else {
+        promotionStatus = isCurrent ? 'EVALUATIONS_PENDING' : 'NO_EVALUATIONS';
+      }
+
+      const isQualified = promotionStatus === 'ELIGIBLE_FOR_PROMOTION' || promotionStatus === 'PROMOTED';
+
+      let formula = 'Awaiting teacher submissions';
+      if (hasBothSemesters) {
+        formula = `(Semester 1 Average: ${sem1Average}% + Semester 2 Average: ${sem2Average}%) ÷ 2 = ${averageScore}%`;
+      } else if (sem1Average !== null) {
+        formula = `Semester 1 Average: ${sem1Average}% (Semester 2 in progress / awaiting final evaluations)`;
+      }
 
       resultsByGrade[gl] = {
         gradeLevel: gl,
@@ -355,12 +443,17 @@ const getMyResults = async (req, res, next) => {
         enrollmentStatus: glEnrollment?.enrollment_status || (isCurrent ? 'ENROLLED' : 'COMPLETED'),
         isCurrent,
         subjectCount,
-        totalScoreSum: parseFloat(totalScoreSum.toFixed(2)),
+        failedCount,
+        sem1Average,
+        sem2Average,
+        totalScoreSum,
         averageScore,
         formula,
         promotionStatus,
         isQualified,
-        grades: glGrades,
+        hasBothSemesters,
+        grades: formattedGrades,
+        rawGrades: glGrades,
       };
     });
 
@@ -456,9 +549,8 @@ const getMyAssignments = async (req, res, next) => {
       return res.json({ success: true, data: [] });
     }
 
-    const result = await query(
-      `SELECT a.id, a.title, a.description, a.assignment_type, a.max_score, a.due_date, a.instructions, a.created_at,
-              a.file_url, a.file_name, a.file_size, a.file_type,
+    let sql = `SELECT a.id, a.title, a.description, a.assignment_type, a.max_score, a.due_date, a.instructions, a.created_at,
+              a.file_url, a.file_name, a.file_size, a.file_type, COALESCE(a.semester, 1) as semester,
               (NOW() > a.due_date) as is_past_due,
               s.name as subject_name, s.code as subject_code,
               u.first_name as teacher_first_name, u.last_name as teacher_last_name,
@@ -492,11 +584,18 @@ const getMyAssignments = async (req, res, next) => {
        )
        LEFT JOIN students sub_s ON ag.submitted_by = sub_s.id
        LEFT JOIN users sub_u ON sub_s.user_id = sub_u.id
-       WHERE ta.section_id = $2
-          OR ta.section_id IN (SELECT section_id FROM enrollments WHERE student_id = $1 AND status = 'ENROLLED')
-       ORDER BY a.due_date ASC`,
-      [student.id, student.current_section_id]
-    );
+       WHERE (ta.section_id = $2
+          OR ta.section_id IN (SELECT section_id FROM enrollments WHERE student_id = $1 AND status = 'ENROLLED'))`;
+    const params = [student.id, student.current_section_id];
+
+    if (req.query.semester) {
+      params.push(parseInt(req.query.semester, 10));
+      sql += ` AND a.semester = $${params.length}`;
+    }
+
+    sql += ` ORDER BY a.due_date ASC`;
+
+    const result = await query(sql, params);
 
     res.json({ success: true, data: result.rows });
   } catch (error) {
@@ -541,12 +640,29 @@ const submitGroupAssignment = async (req, res, next) => {
       );
       if (gRes.rows.length > 0) {
         group = gRes.rows[0];
+
+        // Strict validation: Verify student is not already registered in another group for this assignment
+        const existingMemberRes = await query(
+          `SELECT ag.id, ag.group_name, ag.group_code
+           FROM assignment_group_members agm
+           JOIN assignment_groups ag ON agm.group_id = ag.id
+           WHERE ag.assignment_id = $1 AND agm.student_id = $2 AND ag.id != $3`,
+          [group.assignment_id, student.id, group.id]
+        );
+        if (existingMemberRes.rows.length > 0) {
+          const ex = existingMemberRes.rows[0];
+          return res.status(400).json({
+            success: false,
+            message: `You are already assigned to group "${ex.group_name}" (${ex.group_code}) for this assignment. A student cannot belong to multiple groups for the same assignment.`,
+          });
+        }
+
         // Ensure student is registered as group member
         await query(
-          `INSERT INTO assignment_group_members (group_id, student_id)
-           VALUES ($1, $2)
-           ON CONFLICT (group_id, student_id) DO NOTHING`,
-          [group.id, student.id]
+          `INSERT INTO assignment_group_members (group_id, student_id, assignment_id)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (assignment_id, student_id) DO NOTHING`,
+          [group.id, student.id, group.assignment_id]
         );
       }
     }
@@ -566,7 +682,7 @@ const submitGroupAssignment = async (req, res, next) => {
       } else {
         // If no submission/group record exists yet, verify the assignment belongs to student's section or enrollment
         const aRes = await query(
-          `SELECT a.id, a.title, a.due_date, a.max_score, a.assignment_type, ta.section_id
+          `SELECT a.id, a.title, a.due_date, a.max_score, a.assignment_type, COALESCE(a.semester, 1) as semester, ta.section_id
            FROM assignments a
            JOIN teacher_assignments ta ON a.teacher_assignment_id = ta.id
            WHERE a.id = $1 AND (
@@ -578,9 +694,27 @@ const submitGroupAssignment = async (req, res, next) => {
 
         if (aRes.rows.length > 0) {
           const assign = aRes.rows[0];
+
+          // Strict validation: Verify student is not already in another group for this assignment
+          const anyExisting = await query(
+            `SELECT ag.id, ag.group_name, ag.group_code
+             FROM assignment_group_members agm
+             JOIN assignment_groups ag ON agm.group_id = ag.id
+             WHERE ag.assignment_id = $1 AND agm.student_id = $2`,
+            [assign.id, student.id]
+          );
+          if (anyExisting.rows.length > 0) {
+            const ex = anyExisting.rows[0];
+            return res.status(400).json({
+              success: false,
+              message: `You are already assigned to group "${ex.group_name}" (${ex.group_code}) for this assignment. A student cannot belong to multiple groups for the same assignment.`,
+            });
+          }
+
           const studentCode = student.student_id || `S${student.id}`;
           const cleanInputCode = (groupCode || '').trim().toUpperCase();
-          const generatedCode = cleanInputCode || (assign.assignment_type === 'GROUP' ? `GRP-${assign.id}-${studentCode}` : `IND-${assign.id}-${studentCode}`);
+          const semTag = parseInt(assign.semester, 10) === 2 ? 'S2' : 'S1';
+          const generatedCode = cleanInputCode || (assign.assignment_type === 'GROUP' ? `GRP-${semTag}-${assign.id}-${studentCode}` : `IND-${semTag}-${assign.id}-${studentCode}`);
           const studentFullName = `${student.first_name || ''} ${student.last_name || ''}`.trim() || `Student ${studentCode}`;
           const groupName = assign.assignment_type === 'GROUP'
             ? (cleanInputCode ? `Team ${cleanInputCode}` : `${studentFullName}'s Team`)
@@ -597,10 +731,10 @@ const submitGroupAssignment = async (req, res, next) => {
 
           const newGroup = insRes.rows[0];
           await query(
-            `INSERT INTO assignment_group_members (group_id, student_id)
-             VALUES ($1, $2)
-             ON CONFLICT (group_id, student_id) DO NOTHING`,
-            [newGroup.id, student.id]
+            `INSERT INTO assignment_group_members (group_id, student_id, assignment_id)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (assignment_id, student_id) DO NOTHING`,
+            [newGroup.id, student.id, assign.id]
           );
 
           group = {
