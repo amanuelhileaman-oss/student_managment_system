@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
 import api from '../../services/api';
+import { resolveFileUrl, triggerFileDownload, triggerFilePreview, getViewFileUrl, getAssignmentViewUrl, getSubmissionViewUrl } from '../../utils/fileUrl';
 import Modal from '../../components/common/Modal';
 import Badge from '../../components/common/Badge';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
@@ -22,9 +24,11 @@ import {
   UploadCloud,
   Download,
   Trash2,
+  ArrowLeft,
 } from 'lucide-react';
 
 const StudentAssignmentsPage = () => {
+  const navigate = useNavigate();
   const [assignments, setAssignments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -37,12 +41,58 @@ const StudentAssignmentsPage = () => {
   const [selectedFile, setSelectedFile] = useState(null);
   const [inputGroupCode, setInputGroupCode] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [modalError, setModalError] = useState('');
+  const [modalSuccess, setModalSuccess] = useState('');
+
+  // Download Progress State
+  const [downloadProgress, setDownloadProgress] = useState({});
+  const [downloadingId, setDownloadingId] = useState(null);
+  const [viewingId, setViewingId] = useState(null);
+
+  const handleViewAttachment = async (viewEndpoint, downloadEndpoint, fileName, idKey) => {
+    try {
+      setViewingId(idKey);
+      setError('');
+      const isPdf = (fileName || '').toLowerCase().endsWith('.pdf');
+      if (!isPdf) {
+        return await handleDownloadFile(downloadEndpoint, fileName, idKey);
+      }
+      await triggerFilePreview(viewEndpoint, downloadEndpoint, fileName);
+    } catch (err) {
+      console.error('View attachment error:', err);
+      setError(err.message || 'Could not open document for online viewing.');
+    } finally {
+      setViewingId(null);
+    }
+  };
 
   // View Submission Modal state
   const [viewingSubmission, setViewingSubmission] = useState(null);
 
   // Copy feedback state
   const [copiedCode, setCopiedCode] = useState(null);
+
+  const handleDownloadFile = async (target, fileName, key) => {
+    try {
+      setDownloadingId(key);
+      setDownloadProgress((prev) => ({ ...prev, [key]: 0 }));
+      await triggerFileDownload(target, fileName, (percent) => {
+        setDownloadProgress((prev) => ({ ...prev, [key]: percent }));
+      });
+    } catch (err) {
+      setError(err.message || 'Failed to download file.');
+    } finally {
+      setDownloadingId(null);
+      setTimeout(() => {
+        setDownloadProgress((prev) => {
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        });
+      }, 1500);
+    }
+  };
 
   const formatFileSize = (bytes) => {
     if (!bytes || bytes === 0) return '0 B';
@@ -80,25 +130,32 @@ const StudentAssignmentsPage = () => {
     setSubmissionContent(assignment.submission_content || '');
     setSelectedFile(null);
     setInputGroupCode(assignment.group_code || '');
+    setModalError('');
+    setModalSuccess('');
+    setUploadProgress(0);
     setIsSubmitModalOpen(true);
   };
 
   const handleSubmitWork = async (e) => {
     e.preventDefault();
     if (!selectedAssignForSubmit) return;
+    setModalError('');
+    setModalSuccess('');
+    setError('');
+
     if (!submissionContent.trim() && !selectedFile) {
-      setError('Please attach an assignment document (Word, PDF, Docs) or write your group solution.');
+      setModalError('Please attach an assignment document (Word, PDF, Docs) or write your solution notes.');
       return;
     }
 
     const finalCode = (selectedAssignForSubmit.group_code || inputGroupCode || '').trim();
     if (selectedAssignForSubmit.assignment_type === 'GROUP' && !finalCode) {
-      setError('Please provide a Group Code to submit your group assignment.');
+      setModalError('Please provide a Group Code to submit your group assignment.');
       return;
     }
 
     setSubmitting(true);
-    setError('');
+    setUploadProgress(10);
     try {
       const formData = new FormData();
       if (finalCode) {
@@ -114,16 +171,41 @@ const StudentAssignmentsPage = () => {
 
       const res = await api.post('/students/assignments/submit', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (progressEvent) => {
+          if (progressEvent.total) {
+            const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            setUploadProgress(Math.min(percent, 95));
+          }
+        },
       });
-      setSuccessMsg(res.data.message || 'Group assignment document submitted successfully!');
-      setIsSubmitModalOpen(false);
-      setSelectedAssignForSubmit(null);
-      setSubmissionContent('');
-      setSelectedFile(null);
-      setInputGroupCode('');
+
+      setUploadProgress(100);
+      const succMsg = res.data.message || 'Assignment document submitted successfully!';
+      setModalSuccess(succMsg);
+      setSuccessMsg(succMsg);
+
+      // Trigger global refresh so Student Dashboard state updates
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('stude:refresh'));
+      }
+
       await fetchAssignments();
+
+      // Automatically return to student dashboard after 1.5 seconds
+      setTimeout(() => {
+        setIsSubmitModalOpen(false);
+        setSelectedAssignForSubmit(null);
+        setSubmissionContent('');
+        setSelectedFile(null);
+        setInputGroupCode('');
+        setUploadProgress(0);
+        setModalSuccess('');
+        navigate('/student');
+      }, 1500);
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to submit group assignment.');
+      const msg = err.response?.data?.message || err.message || 'Failed to submit assignment. Please try again.';
+      setModalError(msg);
+      setUploadProgress(0);
     } finally {
       setSubmitting(false);
     }
@@ -155,14 +237,23 @@ const StudentAssignmentsPage = () => {
   return (
     <div className="space-y-6">
       {/* Page Header */}
-      <div>
-        <h1 className="text-2xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight flex items-center gap-2">
-          <FileText className="w-6 h-6 text-emerald-600" />
-          My Class Assignments & Group Projects
-        </h1>
-        <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-          Collaborate with your team using standardized Group Codes, track deadlines, and submit group assignments.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight flex items-center gap-2">
+            <FileText className="w-6 h-6 text-emerald-600" />
+            My Class Assignments & Group Projects
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
+            Collaborate with your team using standardized Group Codes, track deadlines, and submit group assignments.
+          </p>
+        </div>
+        <Link
+          to="/student"
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700/80 shadow-xs transition-colors shrink-0"
+        >
+          <ArrowLeft className="w-3.5 h-3.5 text-slate-500" />
+          <span>Return to Dashboard</span>
+        </Link>
       </div>
 
       {error && <Alert type="error" title="Notice" message={error} onClose={() => setError('')} />}
@@ -226,24 +317,45 @@ const StudentAssignmentsPage = () => {
                         </div>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0">
-                        <a
-                          href={a.file_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-white dark:bg-slate-800 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-700 hover:bg-blue-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-1 shadow-xs"
+                        <button
+                          type="button"
+                          onClick={() => handleViewAttachment(`/students/assignments/${a.id}/view`, `/students/assignments/${a.id}/download`, a.file_name, `assign-view-${a.id}`)}
+                          disabled={viewingId === `assign-view-${a.id}`}
+                          className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-white dark:bg-slate-800 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-700 hover:bg-blue-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-1 shadow-xs disabled:opacity-50"
                           title="View Document"
                         >
                           <Eye className="w-3.5 h-3.5" />
-                          <span>View</span>
-                        </a>
-                        <a
-                          href={a.file_url}
-                          download={a.file_name || 'assignment-document'}
-                          className="p-1 rounded-md text-slate-400 hover:text-blue-600 hover:bg-blue-100/50 dark:hover:bg-blue-900/40 transition-colors"
+                          <span>{viewingId === `assign-view-${a.id}` ? 'Opening...' : 'View'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const target = `/students/assignments/${a.id}/download`;
+                            handleDownloadFile(target, a.file_name || 'assignment-document', `assign-${a.id}`);
+                          }}
+                          disabled={downloadingId === `assign-${a.id}`}
+                          className={`relative overflow-hidden px-2.5 py-1 text-xs font-semibold rounded-lg text-white transition-all flex items-center gap-1 shadow-xs ${
+                            downloadingId === `assign-${a.id}` ? 'bg-blue-700 cursor-wait' : 'bg-blue-600 hover:bg-blue-700'
+                          }`}
                           title="Download Document"
                         >
-                          <Download className="w-3.5 h-3.5" />
-                        </a>
+                          {downloadingId === `assign-${a.id}` && downloadProgress[`assign-${a.id}`] !== undefined && (
+                            <div
+                              className="absolute inset-0 bg-blue-400/30 transition-all duration-150"
+                              style={{ width: `${downloadProgress[`assign-${a.id}`]}%` }}
+                            />
+                          )}
+                          <span className="relative z-10 flex items-center gap-1">
+                            <Download className={`w-3.5 h-3.5 ${downloadingId === `assign-${a.id}` ? 'animate-bounce' : ''}`} />
+                            <span>
+                              {downloadingId === `assign-${a.id}`
+                                ? (downloadProgress[`assign-${a.id}`] !== undefined
+                                    ? `${downloadProgress[`assign-${a.id}`]}%`
+                                    : 'Downloading...')
+                                : 'Download'}
+                            </span>
+                          </span>
+                        </button>
                       </div>
                     </div>
                   )}
@@ -318,6 +430,32 @@ const StudentAssignmentsPage = () => {
                       )}
                     </div>
                   )}
+
+                  {/* Status Banner for Individual Assignments */}
+                  {!isGroup && (
+                    <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800/50 text-xs mb-3.5 flex items-center justify-between">
+                      <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                        Status:
+                      </span>
+                      {isGraded ? (
+                        <span className="px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 font-bold text-[11px]">
+                          Graded: {a.group_score} / {a.max_score} pts
+                        </span>
+                      ) : isSubmitted ? (
+                        <span className="px-2 py-0.5 rounded bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 font-semibold text-[11px]">
+                          Submitted
+                        </span>
+                      ) : isPastDue ? (
+                        <span className="px-2 py-0.5 rounded bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 font-semibold text-[11px]">
+                          Overdue - No Submission
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 font-semibold text-[11px]">
+                          Awaiting Submission
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Card Footer: Due Date & Action Buttons */}
@@ -341,43 +479,41 @@ const StudentAssignmentsPage = () => {
                     </span>
                   </div>
 
-                  {/* Submission Buttons for Group Assignment */}
-                  {isGroup && (
-                    <div className="pt-1 flex items-center justify-end gap-2">
-                      {/* View submission if submitted or graded */}
-                      {(isSubmitted || isGraded) && (a.submission_content || a.submission_file_url) && (
-                        <button
-                          type="button"
-                          onClick={() => setViewingSubmission(a)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                        >
-                          <Eye className="w-3.5 h-3.5 text-emerald-600" />
-                          View Work
-                        </button>
-                      )}
+                  {/* Submission Buttons for All Assignments (Group & Individual) */}
+                  <div className="pt-1 flex items-center justify-end gap-2">
+                    {/* View submission if submitted or graded */}
+                    {(isSubmitted || isGraded) && (a.submission_content || a.submission_file_url) && (
+                      <button
+                        type="button"
+                        onClick={() => setViewingSubmission(a)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                      >
+                        <Eye className="w-3.5 h-3.5 text-emerald-600" />
+                        View Work
+                      </button>
+                    )}
 
-                      {/* Turn In / Edit work if before due date */}
-                      {!isPastDue && (
-                        <button
-                          type="button"
-                          onClick={() => openSubmitModal(a)}
-                          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white text-xs font-semibold shadow-sm transition-all hover:shadow-md"
-                        >
-                          {isSubmitted ? (
-                            <>
-                              <Edit3 className="w-3.5 h-3.5" />
-                              Edit Submission
-                            </>
-                          ) : (
-                            <>
-                              <Send className="w-3.5 h-3.5" />
-                              Turn In Work
-                            </>
-                          )}
-                        </button>
-                      )}
-                    </div>
-                  )}
+                    {/* Turn In / Edit work if before due date */}
+                    {!isPastDue && (
+                      <button
+                        type="button"
+                        onClick={() => openSubmitModal(a)}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white text-xs font-semibold shadow-sm transition-all hover:shadow-md"
+                      >
+                        {isSubmitted ? (
+                          <>
+                            <Edit3 className="w-3.5 h-3.5" />
+                            Edit Submission
+                          </>
+                        ) : (
+                          <>
+                            <Send className="w-3.5 h-3.5" />
+                            Turn In Work
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             );
@@ -394,22 +530,74 @@ const StudentAssignmentsPage = () => {
       {/* ========================================================================= */}
       <Modal
         isOpen={isSubmitModalOpen}
-        onClose={() => setIsSubmitModalOpen(false)}
-        title={`Submit Group Work: ${selectedAssignForSubmit?.title || ''}`}
+        onClose={() => {
+          setIsSubmitModalOpen(false);
+          setModalError('');
+          setModalSuccess('');
+        }}
+        title={
+          selectedAssignForSubmit?.assignment_type === 'GROUP'
+            ? `Submit Group Work: ${selectedAssignForSubmit?.title || ''}`
+            : `Submit Assignment: ${selectedAssignForSubmit?.title || ''}`
+        }
         maxWidth="max-w-xl"
       >
         <form onSubmit={handleSubmitWork} className="space-y-4">
+          {modalError && (
+            <Alert
+              type="error"
+              title="Submission Notice"
+              message={modalError}
+              onClose={() => setModalError('')}
+            />
+          )}
+
+          {modalSuccess && (
+            <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-700 text-emerald-900 dark:text-emerald-100 text-xs flex flex-col sm:flex-row items-center justify-between gap-3 shadow-sm">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                <div>
+                  <p className="font-bold">{modalSuccess}</p>
+                  <p className="text-[11px] text-emerald-700 dark:text-emerald-300">
+                    Returning to Student Dashboard...
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSubmitModalOpen(false);
+                  navigate('/student');
+                }}
+                className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shrink-0 shadow-sm transition-all"
+              >
+                Return to Dashboard Now
+              </button>
+            </div>
+          )}
+
           <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-xs text-emerald-800 dark:text-emerald-300 space-y-1">
             <div className="font-semibold flex items-center gap-1.5">
-              <Users className="w-4 h-4 text-emerald-600" />
-              {selectedAssignForSubmit?.group_code ? (
-                <span>Submitting for {selectedAssignForSubmit?.group_name} ({selectedAssignForSubmit?.group_code})</span>
+              {selectedAssignForSubmit?.assignment_type === 'GROUP' ? (
+                <>
+                  <Users className="w-4 h-4 text-emerald-600" />
+                  {selectedAssignForSubmit?.group_code ? (
+                    <span>Submitting for {selectedAssignForSubmit?.group_name} ({selectedAssignForSubmit?.group_code})</span>
+                  ) : (
+                    <span>Collaborative Group Submission</span>
+                  )}
+                </>
               ) : (
-                <span>Collaborative Group Submission</span>
+                <>
+                  <FileCheck className="w-4 h-4 text-emerald-600" />
+                  <span>Individual Coursework Submission</span>
+                </>
               )}
             </div>
             <p className="text-[11px] text-emerald-700/80 dark:text-emerald-300/80">
-              Any member of your group can upload or update the team's solution before the deadline ({formatDueDate(selectedAssignForSubmit?.due_date)}).
+              {selectedAssignForSubmit?.assignment_type === 'GROUP'
+                ? `Any member of your group can upload or update the team's solution before the deadline (${formatDueDate(selectedAssignForSubmit?.due_date)}).`
+                : `Upload your completed document or write your solutions below before the deadline (${formatDueDate(selectedAssignForSubmit?.due_date)}).`}
             </p>
           </div>
 
@@ -428,29 +616,50 @@ const StudentAssignmentsPage = () => {
                 </div>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
-                <a
-                  href={selectedAssignForSubmit.file_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-2 py-1 text-[11px] font-semibold rounded-lg bg-white dark:bg-slate-800 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-700 hover:bg-blue-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-1 shadow-xs"
+                <button
+                  type="button"
+                  onClick={() => handleViewAttachment(`/students/assignments/${selectedAssignForSubmit.id}/view`, `/students/assignments/${selectedAssignForSubmit.id}/download`, selectedAssignForSubmit.file_name, `modal-view-${selectedAssignForSubmit.id}`)}
+                  disabled={viewingId === `modal-view-${selectedAssignForSubmit.id}`}
+                  className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-white dark:bg-slate-800 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-700 hover:bg-blue-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-1 shadow-xs disabled:opacity-50"
                 >
                   <Eye className="w-3 h-3" />
-                  <span>View</span>
-                </a>
-                <a
-                  href={selectedAssignForSubmit.file_url}
-                  download={selectedAssignForSubmit.file_name || 'assignment-document'}
-                  className="p-1 text-slate-400 hover:text-blue-600 transition-colors"
+                  <span>{viewingId === `modal-view-${selectedAssignForSubmit.id}` ? 'Opening...' : 'View'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = `/students/assignments/${selectedAssignForSubmit.id}/download`;
+                    handleDownloadFile(target, selectedAssignForSubmit.file_name || 'assignment-document', `modal-prompt-${selectedAssignForSubmit.id}`);
+                  }}
+                  disabled={downloadingId === `modal-prompt-${selectedAssignForSubmit.id}`}
+                  className={`relative overflow-hidden px-2.5 py-1 text-xs font-semibold rounded-lg text-white transition-all flex items-center gap-1 shadow-xs ${
+                    downloadingId === `modal-prompt-${selectedAssignForSubmit.id}` ? 'bg-blue-700 cursor-wait' : 'bg-blue-600 hover:bg-blue-700'
+                  }`}
                   title="Download Document"
                 >
-                  <Download className="w-3.5 h-3.5" />
-                </a>
+                  {downloadingId === `modal-prompt-${selectedAssignForSubmit.id}` && downloadProgress[`modal-prompt-${selectedAssignForSubmit.id}`] !== undefined && (
+                    <div
+                      className="absolute inset-0 bg-blue-400/30 transition-all duration-150"
+                      style={{ width: `${downloadProgress[`modal-prompt-${selectedAssignForSubmit.id}`]}%` }}
+                    />
+                  )}
+                  <span className="relative z-10 flex items-center gap-1">
+                    <Download className={`w-3.5 h-3.5 ${downloadingId === `modal-prompt-${selectedAssignForSubmit.id}` ? 'animate-bounce' : ''}`} />
+                    <span>
+                      {downloadingId === `modal-prompt-${selectedAssignForSubmit.id}`
+                        ? (downloadProgress[`modal-prompt-${selectedAssignForSubmit.id}`] !== undefined
+                            ? `${downloadProgress[`modal-prompt-${selectedAssignForSubmit.id}`]}%`
+                            : 'Downloading...')
+                        : 'Download'}
+                    </span>
+                  </span>
+                </button>
               </div>
             </div>
           )}
 
-          {/* Group Code Input if not pre-linked */}
-          {!selectedAssignForSubmit?.group_code && (
+          {/* Group Code Input if not pre-linked and it is a GROUP assignment */}
+          {selectedAssignForSubmit?.assignment_type === 'GROUP' && !selectedAssignForSubmit?.group_code && (
             <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
                 Group Code <span className="text-emerald-600 font-bold">*</span>
@@ -513,7 +722,7 @@ const StudentAssignmentsPage = () => {
                 <div className="space-y-1">
                   <UploadCloud className="w-8 h-8 text-emerald-600 mx-auto" />
                   <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                    Click to browse or drag & drop assignment file
+                    Click to choose file from your device (phone, tablet, or PC)
                   </p>
                   <p className="text-[11px] text-slate-400">
                     Supports Word (.docx, .doc), PDF (.pdf), Excel, and document files up to 25MB
@@ -547,10 +756,38 @@ const StudentAssignmentsPage = () => {
             />
           </div>
 
+          {/* Real-time Upload Progress Bar */}
+          {submitting && selectedFile && (
+            <div className="p-3.5 bg-emerald-50 dark:bg-emerald-950/40 rounded-xl border border-emerald-200 dark:border-emerald-800 space-y-2">
+              <div className="flex items-center justify-between text-xs font-bold text-emerald-800 dark:text-emerald-200">
+                <span className="flex items-center gap-1.5">
+                  <UploadCloud className="w-4 h-4 text-emerald-600 animate-pulse" />
+                  <span>Uploading Document to Cloud Storage...</span>
+                </span>
+                <span className="font-mono text-sm">{uploadProgress}%</span>
+              </div>
+              <div className="w-full bg-emerald-200 dark:bg-emerald-900/60 rounded-full h-2.5 overflow-hidden">
+                <div
+                  className="bg-emerald-600 h-2.5 rounded-full transition-all duration-150 ease-out"
+                  style={{ width: `${uploadProgress}%` }}
+                />
+              </div>
+              <p className="text-[11px] text-emerald-700/80 dark:text-emerald-300">
+                {uploadProgress < 100
+                  ? 'Streaming file directly to Cloudinary CDN from your device...'
+                  : 'Securing submission and registering coursework for teacher evaluation...'}
+              </p>
+            </div>
+          )}
+
           <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-100 dark:border-slate-800">
             <button
               type="button"
-              onClick={() => setIsSubmitModalOpen(false)}
+              onClick={() => {
+                setIsSubmitModalOpen(false);
+                setModalError('');
+                setModalSuccess('');
+              }}
               className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
             >
               Cancel
@@ -563,12 +800,16 @@ const StudentAssignmentsPage = () => {
               {submitting ? (
                 <>
                   <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  <span>Submitting...</span>
+                  <span>{uploadProgress > 0 ? `Uploading ${uploadProgress}%...` : 'Submitting...'}</span>
                 </>
               ) : (
                 <>
                   <Send className="w-3.5 h-3.5" />
-                  <span>Turn In Group Assignment</span>
+                  <span>
+                    {selectedAssignForSubmit?.assignment_type === 'GROUP'
+                      ? 'Turn In Group Assignment'
+                      : 'Turn In Assignment'}
+                  </span>
                 </>
               )}
             </button>
@@ -582,7 +823,11 @@ const StudentAssignmentsPage = () => {
       <Modal
         isOpen={!!viewingSubmission}
         onClose={() => setViewingSubmission(null)}
-        title={`Group Submission: ${viewingSubmission?.title || ''}`}
+        title={
+          viewingSubmission?.assignment_type === 'GROUP'
+            ? `Group Submission: ${viewingSubmission?.title || ''}`
+            : `Assignment Submission: ${viewingSubmission?.title || ''}`
+        }
         maxWidth="max-w-xl"
       >
         <div className="space-y-4">
@@ -624,16 +869,45 @@ const StudentAssignmentsPage = () => {
                 </div>
               </div>
 
-              <a
-                href={viewingSubmission.submission_file_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                download={viewingSubmission.submission_file_name || true}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm shrink-0"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Download Document</span>
-              </a>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => handleViewAttachment(`/students/assignments/submissions/${viewingSubmission.id}/view`, `/students/assignments/submissions/${viewingSubmission.id}/download`, viewingSubmission.submission_file_name, `sub-view-${viewingSubmission.id}`)}
+                  disabled={viewingId === `sub-view-${viewingSubmission.id}`}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 text-xs font-semibold shadow-xs disabled:opacity-50"
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  <span>{viewingId === `sub-view-${viewingSubmission.id}` ? 'Opening...' : 'View'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = `/students/assignments/submissions/${viewingSubmission.id}/download`;
+                    handleDownloadFile(target, viewingSubmission.submission_file_name || 'submission-document', `sub-${viewingSubmission.id}`);
+                  }}
+                  disabled={downloadingId === `sub-${viewingSubmission.id}`}
+                  className={`relative overflow-hidden inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-white text-xs font-semibold shadow-sm transition-all ${
+                    downloadingId === `sub-${viewingSubmission.id}` ? 'bg-emerald-700 cursor-wait' : 'bg-emerald-600 hover:bg-emerald-700'
+                  }`}
+                >
+                  {downloadingId === `sub-${viewingSubmission.id}` && downloadProgress[`sub-${viewingSubmission.id}`] !== undefined && (
+                    <div
+                      className="absolute inset-0 bg-emerald-400/30 transition-all duration-150"
+                      style={{ width: `${downloadProgress[`sub-${viewingSubmission.id}`]}%` }}
+                    />
+                  )}
+                  <span className="relative z-10 flex items-center gap-1">
+                    <Download className={`w-3.5 h-3.5 ${downloadingId === `sub-${viewingSubmission.id}` ? 'animate-bounce' : ''}`} />
+                    <span>
+                      {downloadingId === `sub-${viewingSubmission.id}`
+                        ? (downloadProgress[`sub-${viewingSubmission.id}`] !== undefined
+                            ? `${downloadProgress[`sub-${viewingSubmission.id}`]}%`
+                            : 'Downloading...')
+                        : 'Download'}
+                    </span>
+                  </span>
+                </button>
+              </div>
             </div>
           )}
 

@@ -1,3 +1,5 @@
+const path = require('path');
+const fs = require('fs');
 const { query } = require('../config/db');
 const {
   verifyGrade8Prerequisite,
@@ -8,6 +10,7 @@ const {
 } = require('../services/eligibilityEngine');
 const { enrollStudent } = require('../services/enrollmentService');
 const { logAudit } = require('../services/auditService');
+const { processUploadedFile, getAttachmentUrl, streamFileToResponse, getMimeType } = require('../services/cloudinaryService');
 
 /**
  * Helper to get the student record belonging to the authenticated user
@@ -24,7 +27,37 @@ const getStudentByUserId = async (userId) => {
      WHERE s.user_id = $1`,
     [userId]
   );
-  return res.rows.length > 0 ? res.rows[0] : null;
+  if (res.rows.length === 0) return null;
+  const student = res.rows[0];
+
+  // If current_section_id or current_grade_level is missing, resolve from enrollments table
+  if (!student.current_section_id || !student.current_grade_level) {
+    const enrollRes = await query(
+      `SELECT e.section_id, e.grade_level, sec.section_name, sec.capacity as section_capacity
+       FROM enrollments e
+       LEFT JOIN sections sec ON e.section_id = sec.id
+       WHERE e.student_id = $1 AND e.status = 'ENROLLED'
+       ORDER BY e.enrolled_at DESC LIMIT 1`,
+      [student.id]
+    );
+    if (enrollRes.rows.length > 0) {
+      student.current_section_id = student.current_section_id || enrollRes.rows[0].section_id;
+      student.current_grade_level = student.current_grade_level || enrollRes.rows[0].grade_level;
+      student.section_name = student.section_name || enrollRes.rows[0].section_name;
+      student.section_capacity = student.section_capacity || enrollRes.rows[0].section_capacity;
+
+      // Persist back to students table to keep data synchronized
+      await query(
+        `UPDATE students
+         SET current_section_id = COALESCE(current_section_id, $1),
+             current_grade_level = COALESCE(current_grade_level, $2)
+         WHERE id = $3`,
+        [student.current_section_id, student.current_grade_level, student.id]
+      ).catch(() => {});
+    }
+  }
+
+  return student;
 };
 
 /**
@@ -460,6 +493,7 @@ const getMyAssignments = async (req, res, next) => {
        LEFT JOIN students sub_s ON ag.submitted_by = sub_s.id
        LEFT JOIN users sub_u ON sub_s.user_id = sub_u.id
        WHERE ta.section_id = $2
+          OR ta.section_id IN (SELECT section_id FROM enrollments WHERE student_id = $1 AND status = 'ENROLLED')
        ORDER BY a.due_date ASC`,
       [student.id, student.current_section_id]
     );
@@ -496,13 +530,14 @@ const submitGroupAssignment = async (req, res, next) => {
 
     if (groupCode && groupCode.trim()) {
       const gRes = await query(
-        `SELECT ag.id, ag.group_code, ag.group_name, ag.status,
-                a.id as assignment_id, a.title, a.due_date, a.max_score
+        `SELECT ag.id, ag.group_code, ag.group_name, ag.status, ag.group_score,
+                a.id as assignment_id, a.title, a.due_date, a.max_score, a.assignment_type
          FROM assignment_groups ag
          JOIN assignments a ON ag.assignment_id = a.id
          JOIN teacher_assignments ta ON a.teacher_assignment_id = ta.id
-         WHERE UPPER(TRIM(ag.group_code)) = UPPER(TRIM($1)) AND ta.section_id = $2`,
-        [groupCode.trim(), student.current_section_id]
+         WHERE UPPER(TRIM(ag.group_code)) = UPPER(TRIM($1))
+           AND (ta.section_id = $2 OR ta.section_id IN (SELECT section_id FROM enrollments WHERE student_id = $3 AND status = 'ENROLLED'))`,
+        [groupCode.trim(), student.current_section_id, student.id]
       );
       if (gRes.rows.length > 0) {
         group = gRes.rows[0];
@@ -518,8 +553,8 @@ const submitGroupAssignment = async (req, res, next) => {
 
     if (!group && assignmentId) {
       const mRes = await query(
-        `SELECT ag.id, ag.group_code, ag.group_name, ag.status,
-                a.id as assignment_id, a.title, a.due_date, a.max_score
+        `SELECT ag.id, ag.group_code, ag.group_name, ag.status, ag.group_score,
+                a.id as assignment_id, a.title, a.due_date, a.max_score, a.assignment_type
          FROM assignment_groups ag
          JOIN assignments a ON ag.assignment_id = a.id
          JOIN assignment_group_members agm ON ag.id = agm.group_id
@@ -528,31 +563,98 @@ const submitGroupAssignment = async (req, res, next) => {
       );
       if (mRes.rows.length > 0) {
         group = mRes.rows[0];
+      } else {
+        // If no submission/group record exists yet, verify the assignment belongs to student's section or enrollment
+        const aRes = await query(
+          `SELECT a.id, a.title, a.due_date, a.max_score, a.assignment_type, ta.section_id
+           FROM assignments a
+           JOIN teacher_assignments ta ON a.teacher_assignment_id = ta.id
+           WHERE a.id = $1 AND (
+             ta.section_id = $2
+             OR ta.section_id IN (SELECT section_id FROM enrollments WHERE student_id = $3 AND status = 'ENROLLED')
+           )`,
+          [parseInt(assignmentId, 10), student.current_section_id, student.id]
+        );
+
+        if (aRes.rows.length > 0) {
+          const assign = aRes.rows[0];
+          const studentCode = student.student_id || `S${student.id}`;
+          const cleanInputCode = (groupCode || '').trim().toUpperCase();
+          const generatedCode = cleanInputCode || (assign.assignment_type === 'GROUP' ? `GRP-${assign.id}-${studentCode}` : `IND-${assign.id}-${studentCode}`);
+          const studentFullName = `${student.first_name || ''} ${student.last_name || ''}`.trim() || `Student ${studentCode}`;
+          const groupName = assign.assignment_type === 'GROUP'
+            ? (cleanInputCode ? `Team ${cleanInputCode}` : `${studentFullName}'s Team`)
+            : `${studentFullName} (Individual)`;
+
+          // Create group submission record
+          const insRes = await query(
+            `INSERT INTO assignment_groups (assignment_id, group_code, group_name, status)
+             VALUES ($1, $2, $3, 'PENDING')
+             ON CONFLICT (group_code) DO UPDATE SET group_name = EXCLUDED.group_name
+             RETURNING id, group_code, group_name, status, assignment_id`,
+            [assign.id, generatedCode, groupName]
+          );
+
+          const newGroup = insRes.rows[0];
+          await query(
+            `INSERT INTO assignment_group_members (group_id, student_id)
+             VALUES ($1, $2)
+             ON CONFLICT (group_id, student_id) DO NOTHING`,
+            [newGroup.id, student.id]
+          );
+
+          group = {
+            ...newGroup,
+            title: assign.title,
+            due_date: assign.due_date,
+            max_score: assign.max_score,
+            assignment_type: assign.assignment_type,
+          };
+        }
       }
     }
 
     if (!group) {
       return res.status(403).json({
         success: false,
-        message: 'You are not registered as a member of this project group, or the Group Code was not found for your section.',
+        message: 'This assignment was not found for your class section, or the Group Code is invalid.',
       });
     }
 
-    // 2. Check submission deadline
+    // 2. Prevent re-submission if already graded
+    if (group.status === 'GRADED') {
+      return res.status(400).json({
+        success: false,
+        message: `This coursework has already been evaluated and graded (${group.group_score ?? ''} pts). Modifications are closed.`,
+      });
+    }
+
+    // 3. Check submission deadline
     const now = new Date();
     const dueDate = new Date(group.due_date);
     if (now > dueDate) {
       return res.status(400).json({
         success: false,
-        message: `Submission closed. The deadline for "${group.title}" was ${dueDate.toLocaleString()}. Group assignments cannot be submitted after the due date.`,
+        message: `Submission closed. The deadline for "${group.title}" was ${dueDate.toLocaleString()}. Work cannot be submitted after the due date.`,
       });
     }
 
-    // 3. Save submission (Word / PDF / text)
-    const fileUrl = file ? `/uploads/assignments/${file.filename}` : null;
-    const fileName = file ? file.originalname : null;
-    const fileSize = file ? file.size : null;
-    const fileType = file ? file.mimetype : null;
+    // 4. Save submission (Word / PDF / text / PPT)
+    let fileUrl = null;
+    let fileName = null;
+    let fileSize = null;
+    let fileType = null;
+
+    if (file) {
+      const processed = await processUploadedFile(file, {
+        folder: 'ethio_highhub/submissions',
+        localDir: 'assignments',
+      });
+      fileUrl = processed.fileUrl;
+      fileName = processed.fileName;
+      fileSize = processed.fileSize;
+      fileType = processed.fileType;
+    }
 
     const updateRes = await query(
       `UPDATE assignment_groups
@@ -569,7 +671,7 @@ const submitGroupAssignment = async (req, res, next) => {
       [trimmedContent, fileUrl, fileName, fileSize, fileType, student.id, group.id]
     );
 
-    // 4. Audit log
+    // 5. Audit log
     await logAudit({
       userId: req.user.id,
       action: 'GROUP_ASSIGNMENT_SUBMITTED',
@@ -585,7 +687,7 @@ const submitGroupAssignment = async (req, res, next) => {
 
     res.json({
       success: true,
-      message: `Group assignment document successfully submitted for ${group.group_name} (${group.group_code})!`,
+      message: `Assignment successfully turned in for ${group.group_name} (${group.group_code})!`,
       data: updateRes.rows[0],
     });
   } catch (error) {
@@ -653,6 +755,124 @@ const getMySchedule = async (req, res, next) => {
   }
 };
 
+/**
+ * Download assignment question document for student
+ */
+const downloadAssignmentFile = async (req, res, next) => {
+  try {
+    const assignmentId = parseInt(req.params.id, 10);
+    const aRes = await query('SELECT * FROM assignments WHERE id = $1', [assignmentId]);
+    if (aRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Assignment not found.' });
+    }
+
+    const assignment = aRes.rows[0];
+    if (!assignment.file_url) {
+      return res.status(404).json({ success: false, message: 'No file attached to this assignment.' });
+    }
+
+    await streamFileToResponse({
+      fileUrl: assignment.file_url,
+      fileName: assignment.file_name || 'assignment-document',
+      mimeType: assignment.file_type || getMimeType(assignment.file_name),
+      isInline: false,
+      res,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * View assignment question document inline
+ */
+const viewAssignmentFile = async (req, res, next) => {
+  try {
+    const assignmentId = parseInt(req.params.id, 10);
+    const aRes = await query('SELECT * FROM assignments WHERE id = $1', [assignmentId]);
+    if (aRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Assignment not found.' });
+    }
+
+    const assignment = aRes.rows[0];
+    if (!assignment.file_url) {
+      return res.status(404).json({ success: false, message: 'No file attached to this assignment.' });
+    }
+
+    const ext = path.extname(assignment.file_name || '').toLowerCase();
+    const isOffice = ['.docx', '.doc', '.pptx', '.ppt', '.xlsx', '.xls', '.zip', '.rar'].includes(ext);
+
+    await streamFileToResponse({
+      fileUrl: assignment.file_url,
+      fileName: assignment.file_name || 'assignment-document',
+      mimeType: assignment.file_type || getMimeType(assignment.file_name),
+      isInline: !isOffice,
+      res,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Download student's submitted document
+ */
+const downloadSubmissionFile = async (req, res, next) => {
+  try {
+    const groupId = parseInt(req.params.groupId, 10);
+    const gRes = await query('SELECT * FROM assignment_groups WHERE id = $1', [groupId]);
+    if (gRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Assignment group submission not found.' });
+    }
+
+    const group = gRes.rows[0];
+    if (!group.submission_file_url) {
+      return res.status(404).json({ success: false, message: 'No document attached to this submission.' });
+    }
+
+    await streamFileToResponse({
+      fileUrl: group.submission_file_url,
+      fileName: group.submission_file_name || 'submission-document',
+      mimeType: group.submission_file_type || getMimeType(group.submission_file_name),
+      isInline: false,
+      res,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * View student's submitted document inline
+ */
+const viewSubmissionFile = async (req, res, next) => {
+  try {
+    const groupId = parseInt(req.params.groupId, 10);
+    const gRes = await query('SELECT * FROM assignment_groups WHERE id = $1', [groupId]);
+    if (gRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Assignment group submission not found.' });
+    }
+
+    const group = gRes.rows[0];
+    if (!group.submission_file_url) {
+      return res.status(404).json({ success: false, message: 'No document attached to this submission.' });
+    }
+
+    const ext = path.extname(group.submission_file_name || '').toLowerCase();
+    const isOffice = ['.docx', '.doc', '.pptx', '.ppt', '.xlsx', '.xls', '.zip', '.rar'].includes(ext);
+
+    await streamFileToResponse({
+      fileUrl: group.submission_file_url,
+      fileName: group.submission_file_name || 'submission-document',
+      mimeType: group.submission_file_type || getMimeType(group.submission_file_name),
+      isInline: !isOffice,
+      res,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getPrerequisiteStatus,
   getProgressionEligibility,
@@ -663,4 +883,9 @@ module.exports = {
   getMyAssignments,
   submitGroupAssignment,
   getMySchedule,
+  downloadAssignmentFile,
+  viewAssignmentFile,
+  downloadSubmissionFile,
+  viewSubmissionFile,
 };
+
