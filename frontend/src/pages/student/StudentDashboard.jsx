@@ -18,6 +18,7 @@ import {
   RefreshCw,
   UserCheck,
   FileText,
+  ShieldCheck
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -279,8 +280,8 @@ const StudentDashboard = () => {
             (attendance?.stats?.overallAttendanceRate ?? 100) >= 85
               ? 'emerald'
               : (attendance?.stats?.overallAttendanceRate ?? 100) >= 75
-              ? 'amber'
-              : 'rose'
+                ? 'amber'
+                : 'rose'
           }
           description={
             attendance?.stats?.totalSessions > 0
@@ -556,15 +557,14 @@ const StudentDashboard = () => {
                       </span>
                     )}
                     <span
-                      className={`px-2 py-0.5 rounded-full font-bold uppercase text-[10px] ${
-                        isPres
-                          ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300'
-                          : isLate
+                      className={`px-2 py-0.5 rounded-full font-bold uppercase text-[10px] ${isPres
+                        ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300'
+                        : isLate
                           ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300'
                           : isAbs
-                          ? 'bg-rose-100 text-rose-800 dark:bg-rose-900/60 dark:text-rose-300'
-                          : 'bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-300'
-                      }`}
+                            ? 'bg-rose-100 text-rose-800 dark:bg-rose-900/60 dark:text-rose-300'
+                            : 'bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-300'
+                        }`}
                     >
                       {rec.status}
                     </span>
