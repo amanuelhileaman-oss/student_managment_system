@@ -89,6 +89,7 @@ const UsersManagement = () => {
       const docData = doc.grade8_document_data || '';
       const docName = doc.grade8_document_name || 'Official_Grade8_Certificate.pdf';
       const ext = (docName.split('.').pop() || '').toLowerCase();
+      const isCloudinary = docData.includes('res.cloudinary.com');
 
       // 1. If Base64 URI:
       if (docData.startsWith('data:')) {
@@ -106,21 +107,49 @@ const UsersManagement = () => {
         return;
       }
 
-      // 2. Direct signed URL preview for images and PDFs
-      if (doc.grade8_document_signed_url && (ext === 'pdf' || ['png', 'jpg', 'jpeg', 'webp'].includes(ext))) {
+      // 2. Direct signed URL preview
+      if (doc.grade8_document_signed_url) {
         const previewWin = window.open(doc.grade8_document_signed_url, '_blank');
         if (previewWin && !previewWin.closed) return;
       }
 
-      // 3. Authenticated backend streaming view
-      const endpoint = `/admin/documents/${encodeURIComponent(doc.student_id)}/view`;
-      await triggerFilePreview(endpoint, `${endpoint}?download=true`, docName);
+      // 3. Compute direct high-resolution Cloudinary preview URL
+      let cloudViewUrl = null;
+      if (isCloudinary) {
+        if (docData.includes('/image/upload/')) {
+          cloudViewUrl = docData.replace('/image/upload/', '/image/upload/pg_1/').replace(/\.[^./]+$/i, '.jpg');
+        } else {
+          cloudViewUrl = docData;
+        }
+      }
+
+      // 4. Try backend streaming route; if backend returned 404 (e.g. Render deploying), fall back to Cloudinary view
+      try {
+        const endpoint = `/admin/documents/${encodeURIComponent(doc.student_id)}/view`;
+        await triggerFilePreview(endpoint, `${endpoint}?download=true`, docName);
+        return;
+      } catch (streamErr) {
+        console.warn('Backend stream returned error, falling back to direct cloud view:', streamErr.message);
+        if (cloudViewUrl) {
+          const win = window.open(cloudViewUrl, '_blank');
+          if (win && !win.closed) return;
+        }
+        throw streamErr;
+      }
     } catch (err) {
       console.error('Failed to open document for viewing:', err);
-      if (doc.grade8_document_signed_url) {
-        window.open(doc.grade8_document_signed_url, '_blank');
+      const docData = doc?.grade8_document_data || '';
+      const fallbackUrl =
+        doc?.grade8_document_signed_url ||
+        (docData.includes('res.cloudinary.com')
+          ? docData.includes('/image/upload/')
+            ? docData.replace('/image/upload/', '/image/upload/pg_1/').replace(/\.[^./]+$/i, '.jpg')
+            : docData
+          : null);
+      if (fallbackUrl) {
+        window.open(fallbackUrl, '_blank');
       } else {
-        setDocActionError(err.message || 'Could not open document for online viewing. Please click "Download Original Document" to inspect the file.');
+        setDocActionError(err.message || 'Could not open document for online viewing. Please try again.');
       }
     } finally {
       setDocActionLoading(false);
@@ -134,6 +163,7 @@ const UsersManagement = () => {
     try {
       const docData = doc.grade8_document_data || '';
       const docName = doc.grade8_document_name || 'Official_Grade8_Certificate.pdf';
+      const isCloudinary = docData.includes('res.cloudinary.com');
 
       if (docData.startsWith('data:')) {
         const link = document.createElement('a');
@@ -156,12 +186,53 @@ const UsersManagement = () => {
         return;
       }
 
-      const endpoint = `/admin/documents/${encodeURIComponent(doc.student_id)}/download?download=true`;
-      await triggerFileDownload(endpoint, docName);
+      // Compute direct high-resolution Cloudinary attachment download URL
+      let cloudDownloadUrl = null;
+      if (isCloudinary) {
+        if (docData.includes('/image/upload/')) {
+          cloudDownloadUrl = docData.replace('/image/upload/', '/image/upload/fl_attachment/pg_1/').replace(/\.[^./]+$/i, '.jpg');
+        } else {
+          cloudDownloadUrl = docData;
+        }
+      }
+
+      // Try authenticated backend streaming route; fallback to direct cloud download if backend responds 404
+      try {
+        const endpoint = `/admin/documents/${encodeURIComponent(doc.student_id)}/download?download=true`;
+        await triggerFileDownload(endpoint, docName);
+        return;
+      } catch (dlErr) {
+        console.warn('Backend download route returned error, falling back to direct cloud download:', dlErr.message);
+        if (cloudDownloadUrl) {
+          const link = document.createElement('a');
+          link.href = cloudDownloadUrl;
+          link.download = docName;
+          link.target = '_blank';
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          return;
+        }
+        throw dlErr;
+      }
     } catch (err) {
       console.error('Failed to download document:', err);
-      if (doc.grade8_document_signed_url) {
-        window.open(doc.grade8_document_signed_url, '_blank');
+      const docData = doc?.grade8_document_data || '';
+      const fallbackUrl =
+        doc?.grade8_document_signed_url ||
+        (docData.includes('res.cloudinary.com')
+          ? docData.includes('/image/upload/')
+            ? docData.replace('/image/upload/', '/image/upload/fl_attachment/pg_1/').replace(/\.[^./]+$/i, '.jpg')
+            : docData
+          : null);
+      if (fallbackUrl) {
+        const link = document.createElement('a');
+        link.href = fallbackUrl;
+        link.download = doc?.grade8_document_name || 'Official_Grade8_Certificate';
+        link.target = '_blank';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
       } else {
         setDocActionError(err.message || 'Download failed. Please try again.');
       }
