@@ -131,22 +131,30 @@ const RegisterStudentPage = () => {
   const handleFileProcess = (file) => {
     if (!file) return;
 
-    // Check size limit: max 5MB
-    if (file.size > 5 * 1024 * 1024) {
-      setFormError('The selected file exceeds the 5MB size limit. Please upload a smaller document.');
+    // Check size limit: max 15MB
+    if (file.size > 15 * 1024 * 1024) {
+      setFormError('The selected file exceeds the 15MB size limit. Please upload a smaller document.');
       return;
     }
 
     const ext = (file.name || '').toLowerCase().split('.').pop();
-    const isPdf = file.type === 'application/pdf' || ext === 'pdf';
-    const isImage = file.type?.startsWith('image/') || ['png', 'jpg', 'jpeg', 'webp'].includes(ext);
+    const allowedExts = ['pdf', 'doc', 'docx', 'txt', 'rtf', 'odt', 'ods', 'odp', 'ppt', 'pptx', 'xls', 'xlsx', 'png', 'jpg', 'jpeg', 'webp'];
+    const isAllowed = allowedExts.includes(ext) || file.type?.startsWith('image/') || file.type === 'application/pdf';
 
-    if (!isPdf && !isImage) {
-      setFormError('Invalid file format. Please upload an official document in PDF, PNG, JPG, or WEBP format.');
+    if (!isAllowed) {
+      setFormError('Invalid file format. Please upload an official document in PDF, Word (.doc, .docx), Text (.txt), or Image (JPG, PNG) format.');
       return;
     }
 
-    const resolvedType = file.type || (isPdf ? 'application/pdf' : `image/${ext || 'jpeg'}`);
+    let resolvedType = file.type;
+    if (!resolvedType) {
+      if (ext === 'pdf') resolvedType = 'application/pdf';
+      else if (ext === 'doc') resolvedType = 'application/msword';
+      else if (ext === 'docx') resolvedType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      else if (ext === 'txt') resolvedType = 'text/plain';
+      else if (['png', 'jpg', 'jpeg', 'webp'].includes(ext)) resolvedType = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+      else resolvedType = 'application/octet-stream';
+    }
 
     setFormError('');
     setDocumentFile(file);
@@ -443,8 +451,8 @@ const RegisterStudentPage = () => {
                 </span>
               </div>
               <p className="text-xs text-slate-600 dark:text-slate-400 mb-4 leading-relaxed">
-                Official Ministry Grade 8 certificate or completion examination slip is <strong>compulsory</strong> for high school admission.
-                Your document will be submitted directly to school administration for verification.
+                Official Ministry Grade 8 certificate, completion examination slip, or transcript is <strong>compulsory</strong> for high school admission.
+                Accepted formats: <strong>PDF, Word (.docx, .doc), Text (.txt), or Scanned Images (PNG, JPG, WebP)</strong>. Your document will be submitted directly to school administration for verification.
               </p>
 
               {!documentFile ? (
@@ -462,7 +470,7 @@ const RegisterStudentPage = () => {
                   <input
                     id="grade8-doc-input"
                     type="file"
-                    accept=".pdf,.png,.jpg,.jpeg,.webp,image/*,application/pdf"
+                    accept=".pdf,.doc,.docx,.txt,.rtf,.odt,.png,.jpg,.jpeg,.webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,image/*"
                     className="hidden"
                     onChange={handleFileChange}
                   />
@@ -473,7 +481,7 @@ const RegisterStudentPage = () => {
                     Click to select Grade 8 Document or drag & drop here
                   </p>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                    Accepted formats: PDF, PNG, JPG, or WEBP (Max 5MB)
+                    Accepted formats: PDF, Word (.docx, .doc), Text (.txt), Images (JPG, PNG, WebP) - Max 15MB
                   </p>
                   <button
                     type="button"
