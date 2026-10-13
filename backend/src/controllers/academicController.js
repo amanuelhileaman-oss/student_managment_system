@@ -30,6 +30,7 @@ const getStreams = async (req, res, next) => {
 const getSubjects = async (req, res, next) => {
   try {
     const { gradeLevel, streamId } = req.query;
+    const schoolId = req.user?.school_id;
     let sql = `
       SELECT s.*, st.name as stream_name, st.code as stream_code,
              COUNT(DISTINCT ta.teacher_id) as teacher_count,
@@ -41,6 +42,10 @@ const getSubjects = async (req, res, next) => {
     `;
     const params = [];
 
+    if (schoolId) {
+      params.push(schoolId);
+      sql += ` AND (s.school_id = $${params.length} OR s.school_id IS NULL)`;
+    }
     if (gradeLevel) {
       params.push(parseInt(gradeLevel, 10));
       sql += ` AND s.grade_level = $${params.length}`;
@@ -71,6 +76,7 @@ const getSubjects = async (req, res, next) => {
 const getSections = async (req, res, next) => {
   try {
     const { gradeLevel, streamId } = req.query;
+    const schoolId = req.user?.school_id;
     let sql = `
       SELECT sec.id, sec.grade_level, sec.stream_id, sec.section_name, sec.capacity, sec.academic_year_id, sec.is_active,
              st.name as stream_name, st.code as stream_code,
@@ -84,6 +90,10 @@ const getSections = async (req, res, next) => {
     `;
     const params = [];
 
+    if (schoolId) {
+      params.push(schoolId);
+      sql += ` AND (sec.school_id = $${params.length} OR sec.school_id IS NULL)`;
+    }
     if (gradeLevel) {
       params.push(parseInt(gradeLevel, 10));
       sql += ` AND sec.grade_level = $${params.length}`;
@@ -114,7 +124,15 @@ const getSections = async (req, res, next) => {
  */
 const getAcademicYears = async (req, res, next) => {
   try {
-    const result = await query('SELECT * FROM academic_years ORDER BY start_date DESC');
+    const schoolId = req.user?.school_id;
+    let sql = 'SELECT * FROM academic_years';
+    const params = [];
+    if (schoolId) {
+      params.push(schoolId);
+      sql += ' WHERE school_id = $1 OR school_id IS NULL';
+    }
+    sql += ' ORDER BY start_date DESC';
+    const result = await query(sql, params);
     res.json({ success: true, data: result.rows });
   } catch (error) {
     next(error);
@@ -126,12 +144,19 @@ const getAcademicYears = async (req, res, next) => {
  */
 const getStreamCriteria = async (req, res, next) => {
   try {
-    const result = await query(`
+    const schoolId = req.user?.school_id;
+    let sql = `
       SELECT sc.*, st.name as stream_name, st.code as stream_code
       FROM stream_criteria sc
       JOIN streams st ON sc.stream_id = st.id
-      ORDER BY sc.target_grade_level ASC, st.code ASC
-    `);
+    `;
+    const params = [];
+    if (schoolId) {
+      params.push(schoolId);
+      sql += ' WHERE sc.school_id = $1 OR sc.school_id IS NULL';
+    }
+    sql += ' ORDER BY sc.target_grade_level ASC, st.code ASC';
+    const result = await query(sql, params);
     res.json({ success: true, data: result.rows });
   } catch (error) {
     next(error);

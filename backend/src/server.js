@@ -12,6 +12,7 @@ const reportRoutes = require('./routes/reportRoutes');
 const communicationRoutes = require('./routes/communicationRoutes');
 const auditRoutes = require('./routes/auditRoutes');
 const searchRoutes = require('./routes/searchRoutes');
+const superAdminRoutes = require('./routes/superAdminRoutes');
 const errorHandler = require('./middleware/errorHandler');
 
 const app = express();
@@ -42,7 +43,9 @@ app.use(cors({
 
     const cleanOrigin = origin.replace(/\/+$/, '');
     const isAllowed = allowedOrigins.some((allowed) => cleanOrigin === allowed || cleanOrigin.startsWith(allowed)) ||
-      cleanOrigin.endsWith('.vercel.app');
+      cleanOrigin.endsWith('.vercel.app') ||
+      cleanOrigin.endsWith('.onrender.com') ||
+      cleanOrigin.endsWith('.netlify.app');
 
     if (isAllowed) {
       return callback(null, true);
@@ -80,6 +83,7 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/communications', communicationRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/search', searchRoutes);
+app.use('/api/superadmin', superAdminRoutes);
 
 // Error Handling Middleware
 app.use(errorHandler);
@@ -88,10 +92,10 @@ app.use(errorHandler);
 if (require.main === module) {
   const { ensureAdminUser } = require('./controllers/authController');
 
-  const server = app.listen(PORT, () => {
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`====================================================`);
     console.log(`High School Management System Backend`);
-    console.log(`Server running on: http://localhost:${PORT}`);
+    console.log(`Server running on: http://0.0.0.0:${PORT}`);
     console.log(`Database connected: PostgreSQL`);
     console.log(`====================================================`);
 

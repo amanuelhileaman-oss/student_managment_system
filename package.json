@@ -1,0 +1,16 @@
+{
+  "name": "ethiohighhub",
+  "version": "1.0.0",
+  "private": true,
+  "description": "EthioHighHub - Multi-Tenant SaaS High School Management System",
+  "scripts": {
+    "dev": "node scripts/dev.js",
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "start": "npm --prefix backend start",
+    "db:init": "npm --prefix backend run db:init",
+    "db:seed": "npm --prefix backend run db:seed",
+    "verify": "npm --prefix backend run verify"
+  }
+}

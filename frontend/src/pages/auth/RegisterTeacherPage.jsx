@@ -1,14 +1,17 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import ThemeToggle from '../../components/common/ThemeToggle';
-import { GraduationCap, AlertCircle, CheckCircle2, ArrowRight, ArrowLeft } from 'lucide-react';
+import api from '../../services/api';
+import { GraduationCap, AlertCircle, CheckCircle2, ArrowRight, ArrowLeft, Building2 } from 'lucide-react';
 
 const RegisterTeacherPage = () => {
   const navigate = useNavigate();
   const { registerTeacher } = useAuth();
 
+  const [schools, setSchools] = useState([]);
   const [formData, setFormData] = useState({
+    schoolId: '',
     firstName: '',
     lastName: '',
     email: '',
@@ -23,6 +26,34 @@ const RegisterTeacherPage = () => {
   const [formError, setFormError] = useState('');
   const [formSuccess, setFormSuccess] = useState('');
 
+  useEffect(() => {
+    const fetchSchools = async () => {
+      try {
+        const res = await api.get('/auth/schools');
+        if (res.data?.data) {
+          setSchools(res.data.data);
+          const params = new URLSearchParams(window.location.search);
+          const schoolParam = params.get('school') || params.get('schoolId');
+          if (schoolParam) {
+            const matched = res.data.data.find(
+              (s) => String(s.id) === schoolParam || (s.code && s.code.toLowerCase() === schoolParam.toLowerCase())
+            );
+            if (matched) {
+              setFormData((prev) => ({ ...prev, schoolId: String(matched.id) }));
+              return;
+            }
+          }
+          if (res.data.data.length > 0) {
+            setFormData((prev) => ({ ...prev, schoolId: String(res.data.data[0].id) }));
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load schools list:', err);
+      }
+    };
+    fetchSchools();
+  }, []);
+
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
     if (formError) setFormError('');
@@ -30,6 +61,7 @@ const RegisterTeacherPage = () => {
 
   const validate = () => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!formData.schoolId) return 'Please select the High School you are applying to teach at.';
     if (!formData.firstName.trim()) return 'First name is required.';
     if (!formData.lastName.trim()) return 'Last name is required.';
     if (!formData.email.trim()) return 'Email address is required.';
@@ -129,6 +161,35 @@ const RegisterTeacherPage = () => {
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Target High School Selection */}
+            <div className="p-3.5 rounded-xl bg-gradient-to-r from-emerald-500/10 via-teal-500/10 to-transparent border border-emerald-200 dark:border-emerald-900/60 shadow-xs mb-2">
+              <div className="flex items-center gap-2 mb-1">
+                <Building2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <h3 className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                  Target High School Institution *
+                </h3>
+              </div>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mb-2">
+                Select the high school where you are applying for a teaching faculty position.
+              </p>
+              <div className="relative">
+                <select
+                  required
+                  name="schoolId"
+                  value={formData.schoolId}
+                  onChange={handleChange}
+                  className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all shadow-xs"
+                >
+                  <option value="" disabled>-- Select High School --</option>
+                  {schools.map((sch) => (
+                    <option key={sch.id} value={sch.id}>
+                      {sch.name} {sch.city ? `(${sch.city})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">

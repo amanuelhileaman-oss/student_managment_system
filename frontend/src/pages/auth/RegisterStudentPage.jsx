@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import ThemeToggle from '../../components/common/ThemeToggle';
@@ -20,13 +20,16 @@ import {
   FileText,
   X,
   FileCheck,
+  Building2,
 } from 'lucide-react';
 
 const RegisterStudentPage = () => {
   const navigate = useNavigate();
   const { registerStudent } = useAuth();
 
+  const [schools, setSchools] = useState([]);
   const [formData, setFormData] = useState({
+    schoolId: '',
     firstName: '',
     lastName: '',
     studentId: '',
@@ -42,6 +45,34 @@ const RegisterStudentPage = () => {
     previousSchool: '',
     grade8AverageScore: '',
   });
+
+  useEffect(() => {
+    const fetchSchools = async () => {
+      try {
+        const res = await api.get('/auth/schools');
+        if (res.data?.data) {
+          setSchools(res.data.data);
+          const params = new URLSearchParams(window.location.search);
+          const schoolParam = params.get('school') || params.get('schoolId');
+          if (schoolParam) {
+            const matched = res.data.data.find(
+              (s) => String(s.id) === schoolParam || (s.code && s.code.toLowerCase() === schoolParam.toLowerCase())
+            );
+            if (matched) {
+              setFormData((prev) => ({ ...prev, schoolId: String(matched.id) }));
+              return;
+            }
+          }
+          if (res.data.data.length > 0) {
+            setFormData((prev) => ({ ...prev, schoolId: String(res.data.data[0].id) }));
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load schools list:', err);
+      }
+    };
+    fetchSchools();
+  }, []);
 
   const [prereqStatus, setPrereqStatus] = useState(null); // null, 'checking', 'verified', 'failed'
   const [prereqMessage, setPrereqMessage] = useState('');
@@ -107,6 +138,7 @@ const RegisterStudentPage = () => {
 
   const validateClient = () => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!formData.schoolId) return 'Please select the High School you are applying to.';
     if (!formData.firstName.trim()) return 'First name is required.';
     if (!formData.lastName.trim()) return 'Last name is required.';
     if (!formData.studentId.trim()) return 'Student ID is required.';
@@ -343,6 +375,35 @@ const RegisterStudentPage = () => {
           )}
 
           <form onSubmit={handleSubmit} autoComplete="off" className="space-y-6">
+            {/* Target High School Selection (Multi-Tenant SaaS) */}
+            <div className="p-4 rounded-xl bg-gradient-to-r from-primary-500/10 via-indigo-500/10 to-transparent border border-primary-200 dark:border-primary-900/60 shadow-xs">
+              <div className="flex items-center gap-2 mb-1.5">
+                <Building2 className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+                <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                  Target High School Institution *
+                </h3>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
+                Select the high school you are applying to. Your admission application and Grade 8 certificate will be submitted directly to this institution.
+              </p>
+              <div className="relative">
+                <select
+                  required
+                  name="schoolId"
+                  value={formData.schoolId}
+                  onChange={handleChange}
+                  className="w-full px-3.5 py-2.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-sm font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-primary-500 transition-all shadow-xs"
+                >
+                  <option value="" disabled>-- Select High School --</option>
+                  {schools.map((sch) => (
+                    <option key={sch.id} value={sch.id}>
+                      {sch.name} {sch.city ? `(${sch.city})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
             {/* Step 1: Grade 8 Prerequisite Box */}
             <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700">
               <div className="flex items-center gap-2 mb-2">

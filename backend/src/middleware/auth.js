@@ -36,13 +36,24 @@ const authenticateToken = async (req, res, next) => {
     id: decoded.id,
     email: decoded.email,
     role: decoded.role,
+    school_id: decoded.school_id || null,
+    school_name: decoded.school_name || '',
     firstName: decoded.firstName || '',
     lastName: decoded.lastName || '',
   };
+  req.schoolId = decoded.school_id || null;
 
   try {
-    // Check if account still exists and is not deactivated
-    const userRes = await query('SELECT id, role, first_name, last_name, is_active FROM users WHERE id = $1', [decoded.id]);
+    // Check if account still exists and is not deactivated, and verify school status
+    const userRes = await query(
+      `SELECT u.id, u.role, u.school_id, u.first_name, u.last_name, u.is_active,
+              s.name as school_name, s.code as school_code, s.is_active as school_active, s.subscription_status
+       FROM users u
+       LEFT JOIN schools s ON u.school_id = s.id
+       WHERE u.id = $1`,
+      [decoded.id]
+    );
+
     if (userRes.rows.length > 0) {
       const dbUser = userRes.rows[0];
       if (!dbUser.is_active) {
@@ -51,13 +62,27 @@ const authenticateToken = async (req, res, next) => {
           message: 'Account is deactivated. Please contact the administrator.',
         });
       }
+
+      // Check if school is suspended or inactive (applies to non-superadmin accounts)
+      if (dbUser.role !== 'superadmin' && dbUser.school_id) {
+        if (dbUser.school_active === false || dbUser.subscription_status === 'SUSPENDED') {
+          return res.status(403).json({
+            success: false,
+            message: 'Your school access is currently suspended or inactive. Please contact the platform administrator.',
+          });
+        }
+      }
+
       req.user.role = dbUser.role || req.user.role;
+      req.user.school_id = dbUser.school_id;
+      req.user.school_name = dbUser.school_name || '';
+      req.user.school_code = dbUser.school_code || '';
       req.user.firstName = dbUser.first_name || req.user.firstName;
       req.user.lastName = dbUser.last_name || req.user.lastName;
+      req.schoolId = dbUser.school_id;
     }
   } catch (dbError) {
     // Transient database hiccup or serverless cold start:
-    // Do NOT destroy user's session with a 401!
     console.warn('[Auth Middleware] Database user check skipped due to transient cloud DB issue:', dbError.message);
   }
 
@@ -66,7 +91,7 @@ const authenticateToken = async (req, res, next) => {
 
 /**
  * Middleware to enforce strict role-based access control
- * @param {string[]} allowedRoles - Array of allowed roles ('admin', 'teacher', 'student')
+ * @param {string[]} allowedRoles - Array of allowed roles ('superadmin', 'admin', 'teacher', 'student')
  */
 const requireRole = (allowedRoles) => {
   return (req, res, next) => {

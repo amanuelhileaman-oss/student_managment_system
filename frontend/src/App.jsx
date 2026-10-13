@@ -12,6 +12,9 @@ import LoginPage from './pages/auth/LoginPage';
 import RegisterStudentPage from './pages/auth/RegisterStudentPage';
 import RegisterTeacherPage from './pages/auth/RegisterTeacherPage';
 
+// Super Admin Portal Pages
+import SuperAdminDashboard from './pages/superadmin/SuperAdminDashboard';
+
 // Admin Portal Pages
 import AdminDashboard from './pages/admin/AdminDashboard';
 import SectionsManagement from './pages/admin/SectionsManagement';
@@ -60,6 +63,7 @@ const RoleRoute = ({ allowedRoles, children }) => {
 
   if (!allowedRoles.includes(user.role)) {
     // Redirect user to their own authorized dashboard
+    if (user.role === 'superadmin') return <Navigate to="/superadmin/dashboard" replace />;
     if (user.role === 'admin') return <Navigate to="/admin/dashboard" replace />;
     if (user.role === 'teacher') return <Navigate to="/teacher/dashboard" replace />;
     if (user.role === 'student') return <Navigate to="/student/dashboard" replace />;
@@ -77,6 +81,22 @@ function AppRoutes() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register/student" element={<RegisterStudentPage />} />
       <Route path="/register/teacher" element={<RegisterTeacherPage />} />
+
+      {/* Super Admin Portal Routes */}
+      <Route
+        path="/superadmin/*"
+        element={
+          <RoleRoute allowedRoles={['superadmin']}>
+            <DashboardLayout>
+              <Routes>
+                <Route path="dashboard" element={<SuperAdminDashboard />} />
+                <Route path="profile" element={<ProfilePage />} />
+                <Route path="*" element={<Navigate to="/superadmin/dashboard" replace />} />
+              </Routes>
+            </DashboardLayout>
+          </RoleRoute>
+        }
+      />
 
       {/* Admin Portal Routes */}
       <Route
@@ -153,7 +173,7 @@ function AppRoutes() {
       <Route
         path="/profile"
         element={
-          <RoleRoute allowedRoles={['admin', 'teacher', 'student']}>
+          <RoleRoute allowedRoles={['superadmin', 'admin', 'teacher', 'student']}>
             <DashboardLayout>
               <ProfilePage />
             </DashboardLayout>

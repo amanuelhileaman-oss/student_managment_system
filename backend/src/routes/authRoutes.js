@@ -20,6 +20,7 @@ const handleStudentDocUpload = (req, res, next) => {
 };
 
 router.post('/login', authController.login);
+router.get('/schools', authController.getPublicSchools);
 router.post('/register/student', handleStudentDocUpload, authController.registerStudent);
 router.post('/register/teacher', authController.registerTeacher);
 router.get('/check-prerequisite/:studentId', authController.checkPrerequisite);

@@ -213,7 +213,7 @@ const checkGradeProgression = (currentGradeLevel, targetGradeLevel) => {
   if (targetGradeLevel > currentGradeLevel + 1) {
     return {
       allowed: false,
-      message: `Direct skip from Grade ${currentGradeLevel} to Grade ${targetGradeLevel} is not permitted. Academic progression must be sequential.`,
+      message: `Grade jumping is strictly prohibited. Direct skip from Grade ${currentGradeLevel} to Grade ${targetGradeLevel} is not permitted. Academic progression must be sequential.`,
     };
   }
 

@@ -9,11 +9,25 @@ const { verifyGradeResultsForPromotion } = require('../services/eligibilityEngin
  */
 const getAnalytics = async (req, res, next) => {
   try {
+    const schoolId = req.user?.school_id;
+
     // 1. Total counts
-    const stuCountRes = await query('SELECT COUNT(*) FROM students');
-    const tchCountRes = await query('SELECT COUNT(*) FROM teachers');
-    const secCountRes = await query('SELECT COUNT(*) FROM sections WHERE is_active = TRUE');
-    const enrollCountRes = await query("SELECT COUNT(*) FROM enrollments WHERE status = 'ENROLLED'");
+    const stuCountRes = await query(
+      schoolId ? 'SELECT COUNT(*) FROM students WHERE school_id = $1' : 'SELECT COUNT(*) FROM students',
+      schoolId ? [schoolId] : []
+    );
+    const tchCountRes = await query(
+      schoolId ? 'SELECT COUNT(*) FROM teachers WHERE school_id = $1' : 'SELECT COUNT(*) FROM teachers',
+      schoolId ? [schoolId] : []
+    );
+    const secCountRes = await query(
+      schoolId ? 'SELECT COUNT(*) FROM sections WHERE is_active = TRUE AND (school_id = $1 OR school_id IS NULL)' : 'SELECT COUNT(*) FROM sections WHERE is_active = TRUE',
+      schoolId ? [schoolId] : []
+    );
+    const enrollCountRes = await query(
+      schoolId ? "SELECT COUNT(*) FROM enrollments WHERE status = 'ENROLLED' AND (school_id = $1 OR school_id IS NULL)" : "SELECT COUNT(*) FROM enrollments WHERE status = 'ENROLLED'",
+      schoolId ? [schoolId] : []
+    );
 
     // 2. Capacity metrics
     const capRes = await query(`
@@ -135,10 +149,15 @@ const getUsers = async (req, res, next) => {
       LEFT JOIN streams st ON s.current_stream_id = st.id
       LEFT JOIN sections sec ON s.current_section_id = sec.id
       LEFT JOIN teachers t ON u.id = t.user_id
-      WHERE u.role != 'admin'
+      WHERE u.role != 'admin' AND u.role != 'superadmin'
     `;
     const params = [];
+    const schoolId = req.user?.school_id;
 
+    if (schoolId) {
+      params.push(schoolId);
+      sql += ` AND (u.school_id = $${params.length} OR u.school_id IS NULL)`;
+    }
     if (role) {
       params.push(role);
       sql += ` AND u.role = $${params.length}`;
@@ -231,17 +250,19 @@ const createSection = async (req, res, next) => {
       });
     }
 
+    const schoolId = req.user?.school_id || 1;
+
     // Resolve academic year if not provided
     let yearId = academicYearId;
     if (!yearId) {
-      const yRes = await query('SELECT id FROM academic_years WHERE is_current = TRUE LIMIT 1');
+      const yRes = await query('SELECT id FROM academic_years WHERE (school_id = $1 OR school_id IS NULL) AND is_current = TRUE LIMIT 1', [schoolId]);
       yearId = yRes.rows.length > 0 ? yRes.rows[0].id : 1;
     }
 
     // Check if section already exists
     const existing = await query(
-      'SELECT id FROM sections WHERE grade_level = $1 AND stream_id = $2 AND section_name = $3 AND academic_year_id = $4',
-      [gradeLevel, streamId, sectionName.toUpperCase(), yearId]
+      'SELECT id FROM sections WHERE (school_id = $1 OR school_id IS NULL) AND grade_level = $2 AND stream_id = $3 AND section_name = $4 AND academic_year_id = $5',
+      [schoolId, gradeLevel, streamId, sectionName.toUpperCase(), yearId]
     );
     if (existing.rows.length > 0) {
       return res.status(400).json({
@@ -251,10 +272,10 @@ const createSection = async (req, res, next) => {
     }
 
     const insRes = await query(
-      `INSERT INTO sections (grade_level, stream_id, section_name, capacity, academic_year_id, is_active)
-       VALUES ($1, $2, $3, $4, $5, TRUE)
+      `INSERT INTO sections (school_id, grade_level, stream_id, section_name, capacity, academic_year_id, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, TRUE)
        RETURNING *`,
-      [gradeLevel, streamId, sectionName.toUpperCase(), parseInt(capacity, 10), yearId]
+      [schoolId, gradeLevel, streamId, sectionName.toUpperCase(), parseInt(capacity, 10), yearId]
     );
 
     await logAudit({
@@ -906,10 +927,21 @@ const getStudentDocuments = async (req, res, next) => {
       JOIN users u ON s.user_id = u.id
       LEFT JOIN prerequisites p ON s.student_id = p.student_id
     `;
+    const conditions = [];
     const params = [];
+
+    if (req.user && req.user.school_id) {
+      params.push(req.user.school_id);
+      conditions.push(`s.school_id = $${params.length}`);
+    }
+
     if (status && status !== 'ALL') {
-      queryText += ` WHERE s.document_status = $1`;
       params.push(status);
+      conditions.push(`s.document_status = $${params.length}`);
+    }
+
+    if (conditions.length > 0) {
+      queryText += ` WHERE ` + conditions.join(' AND ');
     }
     queryText += ` ORDER BY s.document_submitted_at DESC NULLS LAST, s.id DESC`;
 
@@ -1228,6 +1260,11 @@ const updateUser = async (req, res, next) => {
 
     if (!firstName || !lastName || !email) {
       return res.status(400).json({ success: false, message: 'First name, last name, and email are required.' });
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email.trim())) {
+      return res.status(400).json({ success: false, message: 'Please provide a valid email address.' });
     }
 
     const updated = await query(

@@ -223,6 +223,12 @@ const Navbar = ({ onMobileMenuToggle }) => {
   };
 
   const roleConfig = {
+    superadmin: {
+      label: 'Platform SuperAdmin',
+      icon: Shield,
+      style: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800',
+      messagesPath: '/superadmin/dashboard',
+    },
     admin: {
       label: 'Administrator',
       icon: Shield,
@@ -271,9 +277,19 @@ const Navbar = ({ onMobileMenuToggle }) => {
               <span className="font-bold text-base tracking-tight text-slate-900 dark:text-slate-100">
                 EthioHigh<span className="text-primary-600 dark:text-primary-400">Hub</span>
               </span>
-              <span className="hidden sm:inline-block ml-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">
-                PERN
-              </span>
+              {user?.school_name ? (
+                <span className="hidden sm:inline-block ml-2 text-[10px] font-bold text-purple-700 bg-purple-100 dark:bg-purple-950/70 dark:text-purple-300 px-2 py-0.5 rounded-full border border-purple-200 dark:border-purple-800">
+                  {user.school_name}
+                </span>
+              ) : user?.role === 'superadmin' ? (
+                <span className="hidden sm:inline-block ml-2 text-[10px] font-bold text-purple-700 bg-purple-100 dark:bg-purple-950/70 dark:text-purple-300 px-2 py-0.5 rounded-full border border-purple-200 dark:border-purple-800">
+                  SuperAdmin
+                </span>
+              ) : (
+                <span className="hidden sm:inline-block ml-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">
+                  PERN SaaS
+                </span>
+              )}
             </div>
           </div>
         </div>

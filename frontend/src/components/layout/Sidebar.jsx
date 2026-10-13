@@ -65,8 +65,14 @@ const Sidebar = ({ isOpen, onClose }) => {
     { name: 'My Profile', path: '/student/profile', icon: User },
   ];
 
+  const superadminNav = [
+    { name: 'Platform Overview', path: '/superadmin/dashboard', icon: LayoutDashboard },
+    { name: 'My Profile', path: '/profile', icon: User },
+  ];
+
   let currentNav = [];
-  if (user?.role === 'admin') currentNav = adminNav;
+  if (user?.role === 'superadmin') currentNav = superadminNav;
+  else if (user?.role === 'admin') currentNav = adminNav;
   else if (user?.role === 'teacher') currentNav = teacherNav;
   else if (user?.role === 'student') currentNav = studentNav;
 
