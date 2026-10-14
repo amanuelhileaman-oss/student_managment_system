@@ -436,11 +436,18 @@ CREATE TABLE announcements (
 CREATE TABLE conversations (
     id SERIAL PRIMARY KEY,
     school_id INT REFERENCES schools(id) ON DELETE CASCADE,
-    user1_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    user2_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    is_group BOOLEAN DEFAULT FALSE,
+    title VARCHAR(200),
+    group_type VARCHAR(50) DEFAULT 'DIRECT',
+    target_grade_level INT,
+    target_section_id INT REFERENCES sections(id) ON DELETE SET NULL,
+    created_by INT REFERENCES users(id) ON DELETE SET NULL,
+    user1_id INT REFERENCES users(id) ON DELETE CASCADE,
+    user2_id INT REFERENCES users(id) ON DELETE CASCADE,
     last_message_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
     CONSTRAINT uq_conversation_pair UNIQUE(user1_id, user2_id),
-    CONSTRAINT chk_conversation_users CHECK (user1_id < user2_id)
+    CONSTRAINT chk_conversation_users CHECK ((is_group = TRUE) OR (user1_id IS NOT NULL AND user2_id IS NOT NULL AND user1_id < user2_id))
 );
 
 CREATE TABLE messages (

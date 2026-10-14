@@ -11,9 +11,11 @@ router.post('/announcements', requireRole(['admin']), communicationController.cr
 router.put('/announcements/:id', requireRole(['admin']), communicationController.updateAnnouncement);
 router.delete('/announcements/:id', requireRole(['admin']), communicationController.deleteAnnouncement);
 
-// Chat & Direct Messages
+// Chat, Direct Messages & Group Channels
 router.get('/contacts', communicationController.getContacts);
 router.post('/conversations/start', communicationController.startConversation);
+router.post('/conversations/group', requireRole(['admin', 'superadmin']), communicationController.startGroupConversation);
+router.delete('/conversations/:conversationId', communicationController.deleteConversation);
 router.get('/conversations', communicationController.getConversations);
 router.get('/conversations/:conversationId/messages', communicationController.getMessages);
 router.post('/messages', communicationController.sendMessage);

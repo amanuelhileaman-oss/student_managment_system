@@ -6,6 +6,9 @@ import {
   MessageSquare,
   Send,
   User,
+  Users,
+  GraduationCap,
+  Layers,
   Search,
   Plus,
   X,
@@ -61,6 +64,17 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
   const [contactSearch, setContactSearch] = useState('');
   const [contactRoleFilter, setContactRoleFilter] = useState('ALL');
 
+  // Group chat creation and modal tabs
+  const [modalTab, setModalTab] = useState('direct'); // 'direct' | 'group'
+  const [sectionsList, setSectionsList] = useState([]);
+  const [selectedGroupGrade, setSelectedGroupGrade] = useState(9);
+  const [selectedSectionId, setSelectedSectionId] = useState('');
+  const [creatingGroup, setCreatingGroup] = useState(false);
+
+  // Conversation deletion state
+  const [deleteConvModalOpen, setDeleteConvModalOpen] = useState(false);
+  const [deletingConv, setDeletingConv] = useState(false);
+
   // Search in existing conversations
   const [searchConv, setSearchConv] = useState('');
 
@@ -84,9 +98,14 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
       const convList = res.data.data || [];
       setConversations(convList);
 
-      // Default select first conversation if none selected
+      // Default select first conversation if none selected, or keep active updated
       if (!silent && !activeConv && convList.length > 0) {
         setActiveConv(convList[0]);
+      } else if (activeConv) {
+        const found = convList.find((c) => c.id === activeConv.id);
+        if (found) {
+          setActiveConv((prev) => ({ ...prev, ...found }));
+        }
       }
     } catch (err) {
       if (!silent) setError('Unable to load conversations.');
@@ -175,9 +194,62 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
     setShowScrollDown(isUp);
   };
 
+  const fetchSections = async () => {
+    try {
+      const res = await api.get('/academic/sections');
+      const list = res.data.data || [];
+      setSectionsList(list);
+      if (list.length > 0 && !selectedSectionId) {
+        setSelectedSectionId(list[0].id);
+      }
+    } catch (e) {
+      console.warn('Failed to fetch sections:', e);
+    }
+  };
+
   const handleOpenContacts = () => {
     setShowContactsModal(true);
     fetchContacts();
+    if (user?.role === 'admin' || user?.role === 'superadmin') {
+      fetchSections();
+    }
+  };
+
+  const handleStartGroup = async ({ groupType, targetGradeLevel, targetSectionId, customTitle }) => {
+    setCreatingGroup(true);
+    try {
+      const res = await api.post('/communications/conversations/group', {
+        groupType,
+        targetGradeLevel,
+        targetSectionId,
+        customTitle,
+      });
+      setShowContactsModal(false);
+      const conv = res.data.data;
+      await fetchConversations(true);
+      setActiveConv(conv);
+      showToast(`Group chat "${conv.title}" opened.`);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to open group chat.');
+    } finally {
+      setCreatingGroup(false);
+    }
+  };
+
+  const handleDeleteConversation = async () => {
+    if (!activeConv) return;
+    setDeletingConv(true);
+    try {
+      await api.delete(`/communications/conversations/${activeConv.id}`);
+      showToast(activeConv.is_group ? 'Group chat deleted successfully.' : 'Conversation deleted successfully.');
+      setDeleteConvModalOpen(false);
+      setActiveConv(null);
+      await fetchConversations(true);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to delete conversation.');
+    } finally {
+      setDeletingConv(false);
+    }
   };
 
   const handleStartWithContact = async (contact) => {
@@ -324,8 +396,9 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
     const name = `${c.first_name || ''} ${c.last_name || ''}`.toLowerCase();
     const email = (c.email || '').toLowerCase();
     const role = (c.role || '').toLowerCase();
+    const title = (c.title || '').toLowerCase();
     const q = searchConv.toLowerCase();
-    return name.includes(q) || email.includes(q) || role.includes(q);
+    return name.includes(q) || email.includes(q) || role.includes(q) || title.includes(q);
   });
 
   const filteredContacts = contacts.filter((item) => {
@@ -424,21 +497,45 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
                         : 'hover:bg-slate-100/70 dark:hover:bg-slate-800/40'
                     }`}
                   >
-                    <div className="w-10 h-10 rounded-xl bg-slate-200 dark:bg-slate-700 flex items-center justify-center font-bold text-xs text-slate-700 dark:text-slate-300 shrink-0">
-                      {c.first_name?.[0] || 'U'}
-                    </div>
+                    {c.is_group ? (
+                      <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 text-white flex items-center justify-center font-bold shadow-xs shrink-0">
+                        {c.group_type === 'TEACHERS' ? (
+                          <GraduationCap className="w-5 h-5" />
+                        ) : c.group_type === 'SECTION' ? (
+                          <Layers className="w-5 h-5" />
+                        ) : (
+                          <Users className="w-5 h-5" />
+                        )}
+                      </div>
+                    ) : (
+                      <div className="w-10 h-10 rounded-xl bg-slate-200 dark:bg-slate-700 flex items-center justify-center font-bold text-xs text-slate-700 dark:text-slate-300 shrink-0">
+                        {c.first_name?.[0] || 'U'}
+                      </div>
+                    )}
 
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-1 mb-0.5">
                         <span className="font-semibold text-xs text-slate-900 dark:text-slate-100 truncate">
-                          {c.first_name} {c.last_name}
+                          {c.is_group ? c.title : `${c.first_name} ${c.last_name}`}
                         </span>
-                        <span
-                          className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded border inline-flex items-center gap-0.5 shrink-0 ${badgeInfo.style}`}
-                        >
-                          <RoleIcon className="w-2.5 h-2.5" />
-                          <span>{badgeInfo.label}</span>
-                        </span>
+                        {c.is_group ? (
+                          <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded border bg-purple-100 text-purple-700 dark:bg-purple-950/70 dark:text-purple-300 border-purple-200 dark:border-purple-800 shrink-0">
+                            {c.group_type === 'TEACHERS'
+                              ? 'Faculty'
+                              : c.group_type === 'SECTION'
+                              ? `Sec ${c.section_name || ''}`
+                              : c.group_type === 'GRADE'
+                              ? `Grade ${c.target_grade_level}`
+                              : 'Group'}
+                          </span>
+                        ) : (
+                          <span
+                            className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded border inline-flex items-center gap-0.5 shrink-0 ${badgeInfo.style}`}
+                          >
+                            <RoleIcon className="w-2.5 h-2.5" />
+                            <span>{badgeInfo.label}</span>
+                          </span>
+                        )}
                       </div>
 
                       <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
@@ -468,28 +565,62 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
             {/* Chat Partner Header */}
             <div className="p-3.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-white dark:bg-slate-900 shrink-0">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-primary-600 to-indigo-600 text-white flex items-center justify-center font-bold text-sm shadow-sm">
-                  {activeConv.first_name?.[0] || 'U'}
-                </div>
+                {activeConv.is_group ? (
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 text-white flex items-center justify-center font-bold text-sm shadow-sm shrink-0">
+                    {activeConv.group_type === 'TEACHERS' ? (
+                      <GraduationCap className="w-5 h-5" />
+                    ) : activeConv.group_type === 'SECTION' ? (
+                      <Layers className="w-5 h-5" />
+                    ) : (
+                      <Users className="w-5 h-5" />
+                    )}
+                  </div>
+                ) : (
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-primary-600 to-indigo-600 text-white flex items-center justify-center font-bold text-sm shadow-sm shrink-0">
+                    {activeConv.first_name?.[0] || 'U'}
+                  </div>
+                )}
                 <div>
                   <div className="flex items-center gap-2">
                     <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">
-                      {activeConv.first_name} {activeConv.last_name}
+                      {activeConv.is_group ? activeConv.title : `${activeConv.first_name} ${activeConv.last_name}`}
                     </h3>
-                    {(() => {
-                      const badge = roleBadges[activeConv.role] || roleBadges.student;
-                      const RoleIcon = badge.icon;
-                      return (
-                        <span
-                          className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded border inline-flex items-center gap-0.5 ${badge.style}`}
-                        >
-                          <RoleIcon className="w-2.5 h-2.5" />
-                          <span>{badge.label}</span>
-                        </span>
-                      );
-                    })()}
+                    {activeConv.is_group ? (
+                      <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded border bg-purple-100 text-purple-700 dark:bg-purple-950/70 dark:text-purple-300 border-purple-200 dark:border-purple-800">
+                        {activeConv.group_type === 'TEACHERS'
+                          ? 'Faculty Group'
+                          : activeConv.group_type === 'SECTION'
+                          ? 'Section Channel'
+                          : activeConv.group_type === 'GRADE'
+                          ? `Grade ${activeConv.target_grade_level} Channel`
+                          : 'School Channel'}
+                      </span>
+                    ) : (
+                      (() => {
+                        const badge = roleBadges[activeConv.role] || roleBadges.student;
+                        const RoleIcon = badge.icon;
+                        return (
+                          <span
+                            className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded border inline-flex items-center gap-0.5 ${badge.style}`}
+                          >
+                            <RoleIcon className="w-2.5 h-2.5" />
+                            <span>{badge.label}</span>
+                          </span>
+                        );
+                      })()
+                    )}
                   </div>
-                  <span className="text-[11px] text-slate-400">{activeConv.email}</span>
+                  <span className="text-[11px] text-slate-400">
+                    {activeConv.is_group
+                      ? activeConv.group_type === 'TEACHERS'
+                        ? 'Official faculty discussion channel'
+                        : activeConv.group_type === 'GRADE'
+                        ? `Official channel for all Grade ${activeConv.target_grade_level} students`
+                        : activeConv.group_type === 'SECTION'
+                        ? `Class section channel • ${activeConv.section_name || ''}`
+                        : 'Official school-wide channel'
+                      : activeConv.email}
+                  </span>
                 </div>
               </div>
 
@@ -511,7 +642,17 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
                   <Search className="w-3.5 h-3.5" />
                 </button>
 
-
+                {/* Delete conversation / group (Admin or participant) */}
+                {(user?.role === 'admin' || user?.role === 'superadmin' || !activeConv.is_group) && (
+                  <button
+                    type="button"
+                    onClick={() => setDeleteConvModalOpen(true)}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                    title={activeConv.is_group ? 'Delete group conversation' : 'Delete conversation'}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
             </div>
 
@@ -826,99 +967,301 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
               </button>
             </div>
 
-            {/* Filter Tabs & Search */}
-            <div className="p-3 border-b border-slate-100 dark:border-slate-800 space-y-2">
-              <div className="relative">
-                <Search className="w-3.5 h-3.5 absolute left-3 top-3 text-slate-400" />
-                <input
-                  type="text"
-                  value={contactSearch}
-                  onChange={(e) => setContactSearch(e.target.value)}
-                  placeholder="Search contacts by name, email, or subject..."
-                  className="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-1 focus:ring-primary-500 text-slate-800 dark:text-slate-200"
-                />
+            {/* Modal Tabs: Single Direct Chat vs Group Chat */}
+            {(user?.role === 'admin' || user?.role === 'superadmin') && (
+              <div className="flex border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/60 px-4 pt-2 gap-4">
+                <button
+                  type="button"
+                  onClick={() => setModalTab('direct')}
+                  className={`pb-2.5 px-2 text-xs font-bold border-b-2 transition-all flex items-center gap-1.5 ${
+                    modalTab === 'direct'
+                      ? 'border-primary-600 text-primary-600 dark:text-primary-400'
+                      : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                  }`}
+                >
+                  <User className="w-3.5 h-3.5" />
+                  <span>Single User (1-on-1)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setModalTab('group')}
+                  className={`pb-2.5 px-2 text-xs font-bold border-b-2 transition-all flex items-center gap-1.5 ${
+                    modalTab === 'group'
+                      ? 'border-primary-600 text-primary-600 dark:text-primary-400'
+                      : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                  }`}
+                >
+                  <Users className="w-3.5 h-3.5" />
+                  <span>Group Chat (Grades, Sections &amp; Staff)</span>
+                </button>
               </div>
+            )}
 
-              {/* Role filter tabs */}
-              <div className="flex gap-1">
-                {['ALL', 'TEACHER', 'STUDENT', 'ADMIN'].map((tab) => (
+            {modalTab === 'group' && (user?.role === 'admin' || user?.role === 'superadmin') ? (
+              /* Group Channels Launch Hub */
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                {/* 1. Faculty Staff Group */}
+                <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-purple-100 dark:bg-purple-950/70 text-purple-600 dark:text-purple-300 flex items-center justify-center shrink-0">
+                      <GraduationCap className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-xs sm:text-sm text-slate-900 dark:text-slate-100">
+                        All Faculty Teachers Group
+                      </h4>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                        Chat directly with all active faculty and teaching staff.
+                      </p>
+                    </div>
+                  </div>
                   <button
-                    key={tab}
                     type="button"
-                    onClick={() => setContactRoleFilter(tab)}
-                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-colors ${
-                      contactRoleFilter === tab
-                        ? 'bg-primary-600 text-white shadow-xs'
-                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
-                    }`}
+                    disabled={creatingGroup}
+                    onClick={() => handleStartGroup({ groupType: 'TEACHERS' })}
+                    className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 active:scale-95 text-white font-semibold text-xs shadow-xs transition-all disabled:opacity-50 shrink-0"
                   >
-                    {tab === 'ALL' ? 'All Roles' : tab + 's'}
+                    Open Group
                   </button>
-                ))}
+                </div>
+
+                {/* 2. All Students Group */}
+                <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-blue-100 dark:bg-blue-950/70 text-blue-600 dark:text-blue-300 flex items-center justify-center shrink-0">
+                      <Users className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-xs sm:text-sm text-slate-900 dark:text-slate-100">
+                        All Students (School-wide)
+                      </h4>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                        School-wide group chat for all registered high school students.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={creatingGroup}
+                    onClick={() => handleStartGroup({ groupType: 'ALL_STUDENTS' })}
+                    className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-semibold text-xs shadow-xs transition-all disabled:opacity-50 shrink-0"
+                  >
+                    Open Group
+                  </button>
+                </div>
+
+                {/* 3. By Grade Level */}
+                <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 space-y-2.5">
+                  <div className="flex items-center gap-2">
+                    <BookOpen className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                    <h4 className="font-bold text-xs sm:text-sm text-slate-900 dark:text-slate-100">
+                      Chat by Grade Level (Targeted)
+                    </h4>
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Open an interactive group chat for an entire specific grade:
+                  </p>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+                    {[9, 10, 11, 12].map((lvl) => (
+                      <button
+                        key={lvl}
+                        type="button"
+                        disabled={creatingGroup}
+                        onClick={() => handleStartGroup({ groupType: 'GRADE', targetGradeLevel: lvl })}
+                        className="py-2 px-3 rounded-xl bg-white dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 border border-slate-200 dark:border-slate-700 hover:border-emerald-400 dark:hover:border-emerald-600 font-bold text-xs text-slate-800 dark:text-slate-200 hover:text-emerald-700 dark:hover:text-emerald-300 transition-all text-center shadow-2xs"
+                      >
+                        Grade {lvl} Group
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 4. By Class Section */}
+                <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 space-y-2.5">
+                  <div className="flex items-center gap-2">
+                    <Layers className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                    <h4 className="font-bold text-xs sm:text-sm text-slate-900 dark:text-slate-100">
+                      Chat by Class Section
+                    </h4>
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Start or open a direct section channel for a specific class section:
+                  </p>
+                  <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                    <select
+                      value={selectedSectionId}
+                      onChange={(e) => setSelectedSectionId(e.target.value)}
+                      className="flex-1 px-3 py-2 text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                    >
+                      {sectionsList.map((sec) => (
+                        <option key={sec.id} value={sec.id}>
+                          Grade {sec.grade_level} - Section {sec.section_name} ({sec.stream_code || 'General'})
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      disabled={creatingGroup || !selectedSectionId}
+                      onClick={() => {
+                        const targetSec = sectionsList.find((s) => s.id === parseInt(selectedSectionId, 10));
+                        handleStartGroup({
+                          groupType: 'SECTION',
+                          targetSectionId: selectedSectionId,
+                          targetGradeLevel: targetSec?.grade_level || 9,
+                        });
+                      }}
+                      className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 active:scale-95 text-white font-bold text-xs shadow-xs transition-all disabled:opacity-50 shrink-0"
+                    >
+                      Open Section Chat
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              /* Direct 1-on-1 Contact Picker */
+              <>
+                {/* Filter Tabs & Search */}
+                <div className="p-3 border-b border-slate-100 dark:border-slate-800 space-y-2">
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 absolute left-3 top-3 text-slate-400" />
+                    <input
+                      type="text"
+                      value={contactSearch}
+                      onChange={(e) => setContactSearch(e.target.value)}
+                      placeholder="Search contacts by name, email, or subject..."
+                      className="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-1 focus:ring-primary-500 text-slate-800 dark:text-slate-200"
+                    />
+                  </div>
+
+                  {/* Role filter tabs */}
+                  <div className="flex gap-1">
+                    {['ALL', 'TEACHER', 'STUDENT', 'ADMIN'].map((tab) => (
+                      <button
+                        key={tab}
+                        type="button"
+                        onClick={() => setContactRoleFilter(tab)}
+                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-colors ${
+                          contactRoleFilter === tab
+                            ? 'bg-primary-600 text-white shadow-xs'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                        }`}
+                      >
+                        {tab === 'ALL' ? 'All Roles' : tab + 's'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Contacts Directory List */}
+                <div className="flex-1 overflow-y-auto p-2 divide-y divide-slate-100 dark:divide-slate-800">
+                  {loadingContacts ? (
+                    <div className="p-8 text-center text-slate-400 text-xs">
+                      Loading available contacts...
+                    </div>
+                  ) : filteredContacts.length > 0 ? (
+                    filteredContacts.map((contact) => {
+                      const badge = roleBadges[contact.role] || roleBadges.student;
+                      const RoleIcon = badge.icon;
+
+                      return (
+                        <div
+                          key={contact.id}
+                          onClick={() => handleStartWithContact(contact)}
+                          className="p-3 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/60 cursor-pointer flex items-center justify-between transition-colors"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-xl bg-slate-200 dark:bg-slate-700 flex items-center justify-center font-bold text-xs text-slate-700 dark:text-slate-300 shrink-0">
+                              {contact.first_name?.[0] || 'U'}
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-xs text-slate-900 dark:text-slate-100">
+                                  {contact.first_name} {contact.last_name}
+                                </span>
+                                <span
+                                  className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded border inline-flex items-center gap-0.5 ${badge.style}`}
+                                >
+                                  <RoleIcon className="w-2.5 h-2.5" />
+                                  <span>{badge.label}</span>
+                                </span>
+                              </div>
+                              <span className="text-[11px] text-slate-400 block">{contact.email}</span>
+                              {contact.specialization && (
+                                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">
+                                  Dept: {contact.specialization}
+                                </span>
+                              )}
+                              {contact.student_id && (
+                                <span className="text-[10px] text-blue-600 dark:text-blue-400 font-medium">
+                                  ID: {contact.student_id} {contact.section_name ? `• ${contact.section_name}` : ''}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            className="px-3 py-1.5 rounded-lg bg-primary-50 dark:bg-primary-950/60 text-primary-600 dark:text-primary-400 hover:bg-primary-100 font-bold text-xs border border-primary-200 dark:border-primary-800 transition-all"
+                          >
+                            Message
+                          </button>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="p-8 text-center text-slate-400 text-xs">
+                      No contacts found matching your query.
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Delete Conversation / Group Confirmation Modal */}
+      {deleteConvModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl p-5 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-100 dark:bg-rose-950/70 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm sm:text-base text-slate-900 dark:text-slate-100">
+                  {activeConv?.is_group ? 'Delete Group Conversation?' : 'Delete Conversation?'}
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  {activeConv?.is_group
+                    ? `This will permanently delete "${activeConv.title}" and all its message history for all members.`
+                    : `This will permanently delete the conversation with ${activeConv?.first_name} ${activeConv?.last_name} and all its messages.`}
+                </p>
               </div>
             </div>
 
-            {/* Contacts Directory List */}
-            <div className="flex-1 overflow-y-auto p-2 divide-y divide-slate-100 dark:divide-slate-800">
-              {loadingContacts ? (
-                <div className="p-8 text-center text-slate-400 text-xs">
-                  Loading available contacts...
-                </div>
-              ) : filteredContacts.length > 0 ? (
-                filteredContacts.map((contact) => {
-                  const badge = roleBadges[contact.role] || roleBadges.student;
-                  const RoleIcon = badge.icon;
-
-                  return (
-                    <div
-                      key={contact.id}
-                      onClick={() => handleStartWithContact(contact)}
-                      className="p-3 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/60 cursor-pointer flex items-center justify-between transition-colors"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-xl bg-slate-200 dark:bg-slate-700 flex items-center justify-center font-bold text-xs text-slate-700 dark:text-slate-300 shrink-0">
-                          {contact.first_name?.[0] || 'U'}
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="font-semibold text-xs text-slate-900 dark:text-slate-100">
-                              {contact.first_name} {contact.last_name}
-                            </span>
-                            <span
-                              className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded border inline-flex items-center gap-0.5 ${badge.style}`}
-                            >
-                              <RoleIcon className="w-2.5 h-2.5" />
-                              <span>{badge.label}</span>
-                            </span>
-                          </div>
-                          <span className="text-[11px] text-slate-400 block">{contact.email}</span>
-                          {contact.specialization && (
-                            <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">
-                              Dept: {contact.specialization}
-                            </span>
-                          )}
-                          {contact.student_id && (
-                            <span className="text-[10px] text-blue-600 dark:text-blue-400 font-medium">
-                              ID: {contact.student_id} {contact.section_name ? `• ${contact.section_name}` : ''}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        className="px-3 py-1.5 rounded-lg bg-primary-50 dark:bg-primary-950/60 text-primary-600 dark:text-primary-400 hover:bg-primary-100 font-bold text-xs border border-primary-200 dark:border-primary-800 transition-all"
-                      >
-                        Message
-                      </button>
-                    </div>
-                  );
-                })
-              ) : (
-                <div className="p-8 text-center text-slate-400 text-xs">
-                  No contacts found matching your query.
-                </div>
-              )}
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setDeleteConvModalOpen(false)}
+                disabled={deletingConv}
+                className="px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteConversation}
+                disabled={deletingConv}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 active:scale-95 text-white flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-50"
+              >
+                {deletingConv ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="w-3.5 h-3.5" />
+                )}
+                <span>Delete {activeConv?.is_group ? 'Group' : 'Chat'}</span>
+              </button>
             </div>
           </div>
         </div>

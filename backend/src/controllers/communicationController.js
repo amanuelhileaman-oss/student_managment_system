@@ -220,23 +220,56 @@ const deleteAnnouncement = async (req, res, next) => {
 };
 
 /**
- * Get active chat conversations for authenticated user
+ * Get active chat conversations for authenticated user (Direct & Group)
  */
 const getConversations = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const { role, id: userId } = req.user;
 
-    const result = await query(
-      `SELECT c.id, c.last_message_at,
-              u.id as other_user_id, u.first_name, u.last_name, u.email, u.role,
-              (SELECT content FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) as last_message,
-              (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id AND sender_id != $1 AND is_read = FALSE) as unread_count
-       FROM conversations c
-       JOIN users u ON (CASE WHEN c.user1_id = $1 THEN c.user2_id ELSE c.user1_id END) = u.id
-       WHERE c.user1_id = $1 OR c.user2_id = $1
-       ORDER BY c.last_message_at DESC`,
-      [userId]
-    );
+    let studentInfo = null;
+    if (role === 'student') {
+      const sRes = await query('SELECT current_grade_level, current_stream_id, current_section_id FROM students WHERE user_id = $1', [userId]);
+      if (sRes.rows.length > 0) studentInfo = sRes.rows[0];
+    }
+
+    let sql = `
+      SELECT c.id, c.is_group, c.title, c.group_type, c.target_grade_level, c.target_section_id, c.created_by, c.last_message_at,
+             sec.section_name,
+             u.id as other_user_id, u.first_name, u.last_name, u.email, u.role,
+             (SELECT content FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) as last_message,
+             (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id AND sender_id != $1 AND is_read = FALSE) as unread_count
+      FROM conversations c
+      LEFT JOIN users u ON (CASE WHEN c.user1_id = $1 THEN c.user2_id ELSE c.user1_id END) = u.id
+      LEFT JOIN sections sec ON c.target_section_id = sec.id
+      WHERE (
+        (c.is_group = FALSE AND (c.user1_id = $1 OR c.user2_id = $1))
+    `;
+    const params = [userId];
+
+    if (role === 'admin' || role === 'superadmin') {
+      // Admin sees all groups
+      sql += ` OR (c.is_group = TRUE) `;
+    } else if (role === 'teacher') {
+      // Teachers see teacher staff group, all-students group, and sections they teach
+      sql += ` OR (c.is_group = TRUE AND (c.group_type = 'TEACHERS' OR c.group_type = 'ALL_STUDENTS')) `;
+    } else if (role === 'student') {
+      // Students see all-students group, their grade group, and their section group
+      sql += ` OR (c.is_group = TRUE AND (
+        c.group_type = 'ALL_STUDENTS'
+      `;
+      if (studentInfo?.current_grade_level) {
+        params.push(studentInfo.current_grade_level);
+        sql += ` OR (c.group_type = 'GRADE' AND c.target_grade_level = $${params.length}) `;
+      }
+      if (studentInfo?.current_section_id) {
+        params.push(studentInfo.current_section_id);
+        sql += ` OR (c.group_type = 'SECTION' AND c.target_section_id = $${params.length}) `;
+      }
+      sql += ` )) `;
+    }
+
+    sql += ` ) ORDER BY c.last_message_at DESC `;
+    const result = await query(sql, params);
 
     res.json({ success: true, data: result.rows });
   } catch (error) {
@@ -245,20 +278,36 @@ const getConversations = async (req, res, next) => {
 };
 
 /**
- * Get messages inside a specific conversation
+ * Get messages inside a specific conversation (Direct or Group)
  */
 const getMessages = async (req, res, next) => {
   try {
     const { conversationId } = req.params;
-    const userId = req.user.id;
+    const { role, id: userId } = req.user;
 
-    // Verify membership
-    const convCheck = await query(
-      'SELECT id FROM conversations WHERE id = $1 AND (user1_id = $2 OR user2_id = $2)',
-      [conversationId, userId]
-    );
-    if (convCheck.rows.length === 0) {
-      return res.status(403).json({ success: false, message: 'You are not authorized to access this conversation.' });
+    const convRes = await query('SELECT * FROM conversations WHERE id = $1', [conversationId]);
+    if (convRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Conversation not found.' });
+    }
+    const conv = convRes.rows[0];
+
+    // Authorization check
+    if (!conv.is_group) {
+      if (conv.user1_id !== userId && conv.user2_id !== userId && role !== 'admin' && role !== 'superadmin') {
+        return res.status(403).json({ success: false, message: 'You are not authorized to access this conversation.' });
+      }
+    } else {
+      if (role === 'student') {
+        const sRes = await query('SELECT current_grade_level, current_section_id FROM students WHERE user_id = $1', [userId]);
+        const sInfo = sRes.rows[0];
+        const isAllowed =
+          conv.group_type === 'ALL_STUDENTS' ||
+          (conv.group_type === 'GRADE' && conv.target_grade_level === sInfo?.current_grade_level) ||
+          (conv.group_type === 'SECTION' && conv.target_section_id === sInfo?.current_section_id);
+        if (!isAllowed) {
+          return res.status(403).json({ success: false, message: 'You are not a member of this group conversation.' });
+        }
+      }
     }
 
     // Mark unread messages as read
@@ -290,7 +339,7 @@ const getContacts = async (req, res, next) => {
     const { role, id: userId } = req.user;
     let users = [];
 
-    if (role === 'admin') {
+    if (role === 'admin' || role === 'superadmin') {
       // Admin can message all faculty/teachers and all students
       const result = await query(
         `SELECT u.id, u.first_name, u.last_name, u.email, u.role,
@@ -339,7 +388,7 @@ const getContacts = async (req, res, next) => {
 };
 
 /**
- * Start or retrieve existing conversation with another user
+ * Start or retrieve existing 1-on-1 direct conversation with another user
  */
 const startConversation = async (req, res, next) => {
   try {
@@ -365,19 +414,19 @@ const startConversation = async (req, res, next) => {
     const u2 = Math.max(senderId, rId);
 
     let convId;
-    const existing = await query('SELECT id FROM conversations WHERE user1_id = $1 AND user2_id = $2', [u1, u2]);
+    const existing = await query('SELECT id FROM conversations WHERE user1_id = $1 AND user2_id = $2 AND is_group = FALSE', [u1, u2]);
     if (existing.rows.length > 0) {
       convId = existing.rows[0].id;
     } else {
       const inserted = await query(
-        'INSERT INTO conversations (user1_id, user2_id, last_message_at) VALUES ($1, $2, NOW()) RETURNING id',
+        'INSERT INTO conversations (is_group, user1_id, user2_id, last_message_at) VALUES (FALSE, $1, $2, NOW()) RETURNING id',
         [u1, u2]
       );
       convId = inserted.rows[0].id;
     }
 
     const convDetail = await query(
-      `SELECT c.id, c.last_message_at,
+      `SELECT c.id, c.is_group, c.title, c.last_message_at,
               u.id as other_user_id, u.first_name, u.last_name, u.email, u.role
        FROM conversations c
        JOIN users u ON (CASE WHEN c.user1_id = $1 THEN c.user2_id ELSE c.user1_id END) = u.id
@@ -386,6 +435,144 @@ const startConversation = async (req, res, next) => {
     );
 
     res.json({ success: true, data: convDetail.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Start or retrieve group conversation (By Grade, By Section, All Students, or Faculty Teachers)
+ */
+const startGroupConversation = async (req, res, next) => {
+  try {
+    const { groupType, targetGradeLevel, targetSectionId, customTitle } = req.body;
+    const userId = req.user.id;
+
+    if (!groupType) {
+      return res.status(400).json({ success: false, message: 'Group type is required.' });
+    }
+
+    let defaultTitle = customTitle;
+    let existingSql = 'SELECT * FROM conversations WHERE is_group = TRUE AND group_type = $1';
+    const existingParams = [groupType];
+
+    if (groupType === 'TEACHERS') {
+      defaultTitle = defaultTitle || 'Faculty Staff Group';
+    } else if (groupType === 'ALL_STUDENTS') {
+      defaultTitle = defaultTitle || 'All Students (School-wide)';
+    } else if (groupType === 'GRADE') {
+      if (!targetGradeLevel) {
+        return res.status(400).json({ success: false, message: 'Target grade level is required.' });
+      }
+      existingParams.push(parseInt(targetGradeLevel, 10));
+      existingSql += ` AND target_grade_level = $${existingParams.length}`;
+      defaultTitle = defaultTitle || `Grade ${targetGradeLevel} - All Students Group`;
+    } else if (groupType === 'SECTION') {
+      if (!targetSectionId) {
+        return res.status(400).json({ success: false, message: 'Target section ID is required.' });
+      }
+      existingParams.push(parseInt(targetSectionId, 10));
+      existingSql += ` AND target_section_id = $${existingParams.length}`;
+
+      const secInfo = await query('SELECT section_name, grade_level FROM sections WHERE id = $1', [targetSectionId]);
+      const sName = secInfo.rows[0]?.section_name || '';
+      const gLevel = targetGradeLevel || secInfo.rows[0]?.grade_level || '';
+      defaultTitle = defaultTitle || `Grade ${gLevel} - Section ${sName} Group`;
+    } else {
+      defaultTitle = defaultTitle || 'Custom Group Chat';
+    }
+
+    const existingRes = await query(existingSql, existingParams);
+    if (existingRes.rows.length > 0) {
+      const conv = existingRes.rows[0];
+      return res.json({
+        success: true,
+        data: {
+          id: conv.id,
+          is_group: true,
+          title: conv.title,
+          group_type: conv.group_type,
+          target_grade_level: conv.target_grade_level,
+          target_section_id: conv.target_section_id,
+          last_message_at: conv.last_message_at,
+        },
+        isNew: false,
+      });
+    }
+
+    const insRes = await query(
+      `INSERT INTO conversations (is_group, title, group_type, target_grade_level, target_section_id, created_by, last_message_at)
+       VALUES (TRUE, $1, $2, $3, $4, $5, NOW())
+       RETURNING *`,
+      [
+        defaultTitle,
+        groupType,
+        targetGradeLevel ? parseInt(targetGradeLevel, 10) : null,
+        targetSectionId ? parseInt(targetSectionId, 10) : null,
+        userId,
+      ]
+    );
+
+    const created = insRes.rows[0];
+
+    await logAudit({
+      userId,
+      action: 'GROUP_CHAT_CREATED',
+      entityType: 'CONVERSATION',
+      entityId: created.id,
+      details: { title: defaultTitle, groupType, targetGradeLevel, targetSectionId },
+    });
+
+    res.status(201).json({
+      success: true,
+      data: {
+        id: created.id,
+        is_group: true,
+        title: created.title,
+        group_type: created.group_type,
+        target_grade_level: created.target_grade_level,
+        target_section_id: created.target_section_id,
+        last_message_at: created.last_message_at,
+      },
+      isNew: true,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Delete a conversation (Group or Direct) and all associated messages
+ */
+const deleteConversation = async (req, res, next) => {
+  try {
+    const { conversationId } = req.params;
+    const { role, id: userId } = req.user;
+
+    const convRes = await query('SELECT * FROM conversations WHERE id = $1', [conversationId]);
+    if (convRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Conversation not found.' });
+    }
+
+    const conv = convRes.rows[0];
+
+    // Admin can delete any conversation. Non-admins can only delete 1-on-1 chats they participate in.
+    if (role !== 'admin' && role !== 'superadmin' && conv.user1_id !== userId && conv.user2_id !== userId) {
+      return res.status(403).json({ success: false, message: 'You are not authorized to delete this conversation.' });
+    }
+
+    // Delete conversation (messages cascade automatically)
+    await query('DELETE FROM conversations WHERE id = $1', [conversationId]);
+
+    await logAudit({
+      userId,
+      action: 'CONVERSATION_DELETED',
+      entityType: 'CONVERSATION',
+      entityId: parseInt(conversationId, 10),
+      details: { is_group: conv.is_group, title: conv.title || 'Direct Chat' },
+    });
+
+    res.json({ success: true, message: 'Conversation and all messages deleted successfully.' });
   } catch (error) {
     next(error);
   }
@@ -413,12 +600,12 @@ const sendMessage = async (req, res, next) => {
       const u1 = Math.min(senderId, parseInt(recipientId, 10));
       const u2 = Math.max(senderId, parseInt(recipientId, 10));
 
-      const existingConv = await query('SELECT id FROM conversations WHERE user1_id = $1 AND user2_id = $2', [u1, u2]);
+      const existingConv = await query('SELECT id FROM conversations WHERE user1_id = $1 AND user2_id = $2 AND is_group = FALSE', [u1, u2]);
       if (existingConv.rows.length > 0) {
         convId = existingConv.rows[0].id;
       } else {
         const newConv = await query(
-          'INSERT INTO conversations (user1_id, user2_id, last_message_at) VALUES ($1, $2, NOW()) RETURNING id',
+          'INSERT INTO conversations (is_group, user1_id, user2_id, last_message_at) VALUES (FALSE, $1, $2, NOW()) RETURNING id',
           [u1, u2]
         );
         convId = newConv.rows[0].id;
@@ -435,21 +622,55 @@ const sendMessage = async (req, res, next) => {
     // Update conversation timestamp
     await query('UPDATE conversations SET last_message_at = NOW() WHERE id = $1', [convId]);
 
-    // Send in-app notification to recipient
-    const convInfo = await query('SELECT user1_id, user2_id FROM conversations WHERE id = $1', [convId]);
+    // Send notifications to recipients
+    const convInfo = await query('SELECT * FROM conversations WHERE id = $1', [convId]);
     if (convInfo.rows.length > 0) {
-      const otherUserId = convInfo.rows[0].user1_id === senderId ? convInfo.rows[0].user2_id : convInfo.rows[0].user1_id;
-      const targetUser = await query('SELECT role FROM users WHERE id = $1', [otherUserId]);
-      const targetRole = targetUser.rows[0]?.role || 'student';
-      const targetLink = `/${targetRole === 'admin' ? 'admin' : targetRole === 'teacher' ? 'teacher' : 'student'}/messages`;
+      const conv = convInfo.rows[0];
+      if (!conv.is_group) {
+        const otherUserId = conv.user1_id === senderId ? conv.user2_id : conv.user1_id;
+        const targetUser = await query('SELECT role FROM users WHERE id = $1', [otherUserId]);
+        const targetRole = targetUser.rows[0]?.role || 'student';
+        const targetLink = `/${targetRole === 'admin' ? 'admin' : targetRole === 'teacher' ? 'teacher' : 'student'}/messages`;
 
-      await sendNotification({
-        userId: otherUserId,
-        title: `New message from ${req.user.firstName || 'Faculty/Staff'}`,
-        message: content.trim().slice(0, 100),
-        type: 'MESSAGE',
-        link: targetLink,
-      });
+        await sendNotification({
+          userId: otherUserId,
+          title: `New message from ${req.user.firstName || 'Faculty/Staff'}`,
+          message: content.trim().slice(0, 100),
+          type: 'MESSAGE',
+          link: targetLink,
+        });
+      } else {
+        // Group notification broadcast
+        try {
+          let targetRoles = [];
+          let targetUserIds = [];
+
+          if (conv.group_type === 'TEACHERS') {
+            targetRoles = req.user.role === 'admin' ? ['teacher'] : ['admin', 'teacher'];
+          } else if (conv.group_type === 'ALL_STUDENTS') {
+            targetRoles = ['student'];
+          } else if (conv.group_type === 'GRADE') {
+            const stRes = await query('SELECT user_id FROM students WHERE current_grade_level = $1', [conv.target_grade_level]);
+            targetUserIds = stRes.rows.map(r => r.user_id).filter(id => id !== senderId);
+          } else if (conv.group_type === 'SECTION') {
+            const stRes = await query('SELECT user_id FROM students WHERE current_section_id = $1', [conv.target_section_id]);
+            targetUserIds = stRes.rows.map(r => r.user_id).filter(id => id !== senderId);
+          }
+
+          if (targetRoles.length > 0 || targetUserIds.length > 0) {
+            await broadcastNotification({
+              roles: targetRoles,
+              userIds: targetUserIds,
+              title: `${conv.title}: New message from ${req.user.firstName || 'Admin'}`,
+              message: content.trim().slice(0, 100),
+              type: 'MESSAGE',
+              link: `/${req.user.role === 'admin' ? 'admin' : req.user.role === 'teacher' ? 'teacher' : 'student'}/messages`,
+            });
+          }
+        } catch (notifErr) {
+          console.warn('[sendMessage] Group notification error:', notifErr.message);
+        }
+      }
     }
 
     res.status(201).json({ success: true, data: msgRes.rows[0] });
@@ -649,4 +870,6 @@ module.exports = {
   clearAllNotifications: clearAllNotificationsEndpoint,
   getContacts,
   startConversation,
+  startGroupConversation,
+  deleteConversation,
 };
