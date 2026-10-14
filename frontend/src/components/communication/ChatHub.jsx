@@ -566,7 +566,17 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
                       </div>
 
                       <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
-                        {c.last_message || 'Start conversation...'}
+                        {c.is_group ? (
+                          c.group_type === 'GRADE'
+                            ? `Official channel for all Grade ${c.target_grade_level} students`
+                            : c.group_type === 'SECTION'
+                            ? `Class Section ${c.section_name || ''} channel`
+                            : c.group_type === 'TEACHERS'
+                            ? 'Official faculty staff channel'
+                            : 'Official school-wide channel'
+                        ) : (
+                          `Direct conversation with ${c.first_name || 'contact'}`
+                        )}
                       </p>
 
                       {hasUnread && (
@@ -909,7 +919,9 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
                   <p className="font-semibold text-slate-600 dark:text-slate-300">
                     {msgSearchTerm
                       ? `No messages matched "${msgSearchTerm}"`
-                      : `Direct conversation with ${activeConv.first_name}`}
+                      : activeConv.is_group
+                      ? `Welcome to ${activeConv.title}`
+                      : `Direct conversation with ${activeConv.first_name || 'contact'}`}
                   </p>
                   <p className="text-[11px] text-slate-400 mt-0.5">
                     {msgSearchTerm
@@ -943,7 +955,7 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
                 onChange={(e) => setNewMsg(e.target.value)}
                 onKeyDown={handleKeyDown}
                 rows={1}
-                placeholder={`Message ${activeConv.first_name}... (Press Enter to send)`}
+                placeholder={`Message ${activeConv?.is_group ? activeConv.title : (activeConv?.first_name || 'contact')}... (Press Enter to send)`}
                 className="flex-1 px-3.5 py-2 text-xs sm:text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 text-slate-900 dark:text-slate-100 resize-none max-h-24"
               />
               <button

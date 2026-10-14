@@ -22,11 +22,14 @@ const getAnnouncements = async (req, res, next) => {
       if (sRes.rows.length > 0) studentInfo = sRes.rows[0];
     }
 
+    const schoolId = req.user.school_id;
+
     let sql = `
       SELECT a.*, u.first_name as author_first_name, u.last_name as author_last_name
       FROM announcements a
       LEFT JOIN users u ON a.created_by = u.id
-      WHERE a.target_audience = 'ALL'
+      WHERE (
+        a.target_audience = 'ALL'
     `;
     const params = [];
 
@@ -46,13 +49,16 @@ const getAnnouncements = async (req, res, next) => {
         params.push(studentInfo.current_section_id);
         sql += ` OR (a.target_audience = 'SECTION' AND a.target_section_id = $${params.length})`;
       }
-    } else if (role === 'admin') {
-      // Admin sees all announcements
-      sql = `
-        SELECT a.*, u.first_name as author_first_name, u.last_name as author_last_name
-        FROM announcements a
-        LEFT JOIN users u ON a.created_by = u.id
-      `;
+    } else if (role === 'admin' || role === 'superadmin') {
+      // Admin sees all audience types
+      sql += " OR 1=1";
+    }
+
+    sql += ' )';
+
+    if (schoolId && role !== 'superadmin') {
+      params.push(schoolId);
+      sql += ` AND (a.school_id = $${params.length} OR a.school_id IS NULL)`;
     }
 
     sql += ' ORDER BY a.created_at DESC LIMIT 50';
@@ -70,51 +76,76 @@ const getAnnouncements = async (req, res, next) => {
 const createAnnouncement = async (req, res, next) => {
   try {
     const { title, content, targetAudience = 'ALL', targetGradeLevel, targetStreamId, targetSectionId } = req.body;
+    const schoolId = req.user.school_id;
 
     if (!title || !content) {
       return res.status(400).json({ success: false, message: 'Title and content are required.' });
     }
 
     const insRes = await query(
-      `INSERT INTO announcements (created_by, title, content, target_audience, target_grade_level, target_stream_id, target_section_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO announcements (created_by, title, content, target_audience, target_grade_level, target_stream_id, target_section_id, school_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
-      [req.user.id, title, content, targetAudience, targetGradeLevel || null, targetStreamId || null, targetSectionId || null]
+      [req.user.id, title, content, targetAudience, targetGradeLevel || null, targetStreamId || null, targetSectionId || null, schoolId]
     );
 
-    // Broadcast in-app notifications
+    // Broadcast in-app notifications strictly within the same school
     try {
       let targetRoles = [];
       let targetUserIds = [];
 
       if (targetAudience === 'ALL') {
-        targetRoles = ['student', 'teacher', 'admin'];
+        let uSql = 'SELECT id FROM users WHERE is_active = TRUE';
+        const uParams = [];
+        if (schoolId) {
+          uParams.push(schoolId);
+          uSql += ` AND school_id = $${uParams.length}`;
+        }
+        const uRes = await query(uSql, uParams);
+        targetUserIds = uRes.rows.map((r) => r.id);
       } else if (targetAudience === 'TEACHERS') {
-        targetRoles = ['teacher'];
+        let uSql = 'SELECT id FROM users WHERE role = \'teacher\' AND is_active = TRUE';
+        const uParams = [];
+        if (schoolId) {
+          uParams.push(schoolId);
+          uSql += ` AND school_id = $${uParams.length}`;
+        }
+        const uRes = await query(uSql, uParams);
+        targetUserIds = uRes.rows.map((r) => r.id);
       } else if (targetAudience === 'STUDENTS') {
-        targetRoles = ['student'];
+        let uSql = 'SELECT id FROM users WHERE role = \'student\' AND is_active = TRUE';
+        const uParams = [];
+        if (schoolId) {
+          uParams.push(schoolId);
+          uSql += ` AND school_id = $${uParams.length}`;
+        }
+        const uRes = await query(uSql, uParams);
+        targetUserIds = uRes.rows.map((r) => r.id);
       } else if (['GRADE', 'STREAM', 'SECTION'].includes(targetAudience)) {
-        let filterSql = 'SELECT user_id FROM students WHERE 1=1';
+        let filterSql = 'SELECT s.user_id FROM students s JOIN users u ON s.user_id = u.id WHERE u.is_active = TRUE';
         const filterParams = [];
+        if (schoolId) {
+          filterParams.push(schoolId);
+          filterSql += ` AND (s.school_id = $${filterParams.length} OR u.school_id = $${filterParams.length})`;
+        }
         if (targetGradeLevel) {
           filterParams.push(targetGradeLevel);
-          filterSql += ` AND current_grade_level = $${filterParams.length}`;
+          filterSql += ` AND s.current_grade_level = $${filterParams.length}`;
         }
         if (targetStreamId) {
           filterParams.push(targetStreamId);
-          filterSql += ` AND current_stream_id = $${filterParams.length}`;
+          filterSql += ` AND s.current_stream_id = $${filterParams.length}`;
         }
         if (targetSectionId) {
           filterParams.push(targetSectionId);
-          filterSql += ` AND current_section_id = $${filterParams.length}`;
+          filterSql += ` AND s.current_section_id = $${filterParams.length}`;
         }
         const stRes = await query(filterSql, filterParams);
         targetUserIds = stRes.rows.map((r) => r.user_id);
       }
 
-      if (targetRoles.length > 0 || targetUserIds.length > 0) {
+      if (targetUserIds.length > 0) {
         await broadcastNotification({
-          roles: targetRoles,
           userIds: targetUserIds,
           title: `Announcement: ${title.slice(0, 50)}`,
           message: content.slice(0, 120),
@@ -224,7 +255,7 @@ const deleteAnnouncement = async (req, res, next) => {
  */
 const getConversations = async (req, res, next) => {
   try {
-    const { role, id: userId } = req.user;
+    const { role, id: userId, school_id: schoolId } = req.user;
 
     let studentInfo = null;
     if (role === 'student') {
@@ -233,10 +264,9 @@ const getConversations = async (req, res, next) => {
     }
 
     let sql = `
-      SELECT c.id, c.is_group, c.title, c.group_type, c.target_grade_level, c.target_section_id, c.created_by, c.last_message_at,
+      SELECT c.id, c.is_group, c.title, c.group_type, c.target_grade_level, c.target_section_id, c.created_by, c.school_id, c.last_message_at,
              sec.section_name,
              u.id as other_user_id, u.first_name, u.last_name, u.email, u.role,
-             (SELECT content FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) as last_message,
              (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id AND sender_id != $1 AND is_read = FALSE) as unread_count
       FROM conversations c
       LEFT JOIN users u ON (CASE WHEN c.user1_id = $1 THEN c.user2_id ELSE c.user1_id END) = u.id
@@ -247,7 +277,7 @@ const getConversations = async (req, res, next) => {
     const params = [userId];
 
     if (role === 'admin' || role === 'superadmin') {
-      // Admin sees all groups
+      // Admin sees all groups in their school
       sql += ` OR (c.is_group = TRUE) `;
     } else if (role === 'teacher') {
       // Teachers see teacher staff group, all-students group, and sections they teach
@@ -268,7 +298,23 @@ const getConversations = async (req, res, next) => {
       sql += ` )) `;
     }
 
-    sql += ` ) ORDER BY c.last_message_at DESC `;
+    sql += ` ) `;
+
+    // Strict multi-tenant school isolation
+    if (schoolId && role !== 'superadmin') {
+      params.push(schoolId);
+      sql += ` AND (
+        c.school_id = $${params.length}
+        OR (
+          c.school_id IS NULL AND (
+            c.created_by IN (SELECT id FROM users WHERE school_id = $${params.length})
+            OR c.user1_id IN (SELECT id FROM users WHERE school_id = $${params.length})
+          )
+        )
+      ) `;
+    }
+
+    sql += ` ORDER BY c.last_message_at DESC `;
     const result = await query(sql, params);
 
     res.json({ success: true, data: result.rows });
@@ -283,7 +329,7 @@ const getConversations = async (req, res, next) => {
 const getMessages = async (req, res, next) => {
   try {
     const { conversationId } = req.params;
-    const { role, id: userId } = req.user;
+    const { role, id: userId, school_id: schoolId } = req.user;
 
     const convRes = await query('SELECT * FROM conversations WHERE id = $1', [conversationId]);
     if (convRes.rows.length === 0) {
@@ -291,7 +337,23 @@ const getMessages = async (req, res, next) => {
     }
     const conv = convRes.rows[0];
 
-    // Authorization check
+    // Strict multi-tenant school authorization check
+    if (schoolId && role !== 'superadmin') {
+      if (conv.school_id && conv.school_id !== schoolId) {
+        return res.status(403).json({ success: false, message: 'You are not authorized to access conversations from another school.' });
+      }
+      if (!conv.school_id) {
+        const checkSchool = await query(
+          'SELECT id FROM users WHERE id IN ($1, $2, $3) AND school_id = $4 LIMIT 1',
+          [conv.created_by || 0, conv.user1_id || 0, conv.user2_id || 0, schoolId]
+        );
+        if (checkSchool.rows.length === 0) {
+          return res.status(403).json({ success: false, message: 'You are not authorized to access conversations from another school.' });
+        }
+      }
+    }
+
+    // Role and membership authorization check
     if (!conv.is_group) {
       if (conv.user1_id !== userId && conv.user2_id !== userId && role !== 'admin' && role !== 'superadmin') {
         return res.status(403).json({ success: false, message: 'You are not authorized to access this conversation.' });
@@ -332,15 +394,19 @@ const getMessages = async (req, res, next) => {
 };
 
 /**
- * Get contacts list for current user based on role responsibilities
+ * Get contacts list for current user strictly within their own school
  */
 const getContacts = async (req, res, next) => {
   try {
-    const { role, id: userId } = req.user;
+    const { role, id: userId, school_id: schoolId } = req.user;
     let users = [];
 
+    const schoolFilter = (schoolId && role !== 'superadmin') ? ' AND u.school_id = $2' : '';
+    const params = [userId];
+    if (schoolId && role !== 'superadmin') params.push(schoolId);
+
     if (role === 'admin' || role === 'superadmin') {
-      // Admin can message all faculty/teachers and all students
+      // Admin can message faculty/teachers and students within the same school
       const result = await query(
         `SELECT u.id, u.first_name, u.last_name, u.email, u.role,
                 t.specialization, t.teacher_id,
@@ -349,34 +415,34 @@ const getContacts = async (req, res, next) => {
          LEFT JOIN teachers t ON u.id = t.user_id
          LEFT JOIN students s ON u.id = s.user_id
          LEFT JOIN sections sec ON s.current_section_id = sec.id
-         WHERE u.id != $1 AND u.is_active = TRUE
+         WHERE u.id != $1 AND u.is_active = TRUE ${schoolFilter}
          ORDER BY u.role, u.first_name ASC`,
-        [userId]
+        params
       );
       users = result.rows;
     } else if (role === 'teacher') {
-      // Teacher can message administrators and all students
+      // Teacher can message administrators and students within the same school
       const result = await query(
         `SELECT u.id, u.first_name, u.last_name, u.email, u.role,
                 s.student_id, sec.section_name, s.current_grade_level
          FROM users u
          LEFT JOIN students s ON u.id = s.user_id
          LEFT JOIN sections sec ON s.current_section_id = sec.id
-         WHERE u.id != $1 AND u.is_active = TRUE AND (u.role = 'admin' OR u.role = 'student')
+         WHERE u.id != $1 AND u.is_active = TRUE AND (u.role = 'admin' OR u.role = 'student') ${schoolFilter}
          ORDER BY u.role, u.first_name ASC`,
-        [userId]
+        params
       );
       users = result.rows;
     } else if (role === 'student') {
-      // Student can message administrators and faculty teachers
+      // Student can message administrators and teachers within the same school
       const result = await query(
         `SELECT u.id, u.first_name, u.last_name, u.email, u.role,
                 t.specialization, t.teacher_id
          FROM users u
          LEFT JOIN teachers t ON u.id = t.user_id
-         WHERE u.id != $1 AND u.is_active = TRUE AND (u.role = 'admin' OR u.role = 'teacher')
+         WHERE u.id != $1 AND u.is_active = TRUE AND (u.role = 'admin' OR u.role = 'teacher') ${schoolFilter}
          ORDER BY u.role, u.first_name ASC`,
-        [userId]
+        params
       );
       users = result.rows;
     }
@@ -394,6 +460,7 @@ const startConversation = async (req, res, next) => {
   try {
     const { recipientId } = req.body;
     const senderId = req.user.id;
+    const schoolId = req.user.school_id;
 
     if (!recipientId) {
       return res.status(400).json({ success: false, message: 'Recipient ID is required.' });
@@ -405,28 +472,41 @@ const startConversation = async (req, res, next) => {
     }
 
     // Verify recipient exists and is active
-    const recCheck = await query('SELECT id, first_name, last_name, role, email FROM users WHERE id = $1 AND is_active = TRUE', [rId]);
+    const recCheck = await query('SELECT id, first_name, last_name, role, email, school_id FROM users WHERE id = $1 AND is_active = TRUE', [rId]);
     if (recCheck.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Recipient user not found or inactive.' });
+    }
+
+    const recipient = recCheck.rows[0];
+    if (schoolId && req.user.role !== 'superadmin') {
+      if (recipient.school_id && recipient.school_id !== schoolId) {
+        return res.status(403).json({ success: false, message: 'Cannot start conversation with a user from another school.' });
+      }
     }
 
     const u1 = Math.min(senderId, rId);
     const u2 = Math.max(senderId, rId);
 
     let convId;
-    const existing = await query('SELECT id FROM conversations WHERE user1_id = $1 AND user2_id = $2 AND is_group = FALSE', [u1, u2]);
+    let existingSql = 'SELECT id FROM conversations WHERE user1_id = $1 AND user2_id = $2 AND is_group = FALSE';
+    const existingParams = [u1, u2];
+    if (schoolId) {
+      existingParams.push(schoolId);
+      existingSql += ` AND (school_id = $${existingParams.length} OR school_id IS NULL)`;
+    }
+    const existing = await query(existingSql, existingParams);
     if (existing.rows.length > 0) {
       convId = existing.rows[0].id;
     } else {
       const inserted = await query(
-        'INSERT INTO conversations (is_group, user1_id, user2_id, last_message_at) VALUES (FALSE, $1, $2, NOW()) RETURNING id',
-        [u1, u2]
+        'INSERT INTO conversations (is_group, user1_id, user2_id, school_id, last_message_at) VALUES (FALSE, $1, $2, $3, NOW()) RETURNING id',
+        [u1, u2, schoolId || recipient.school_id || null]
       );
       convId = inserted.rows[0].id;
     }
 
     const convDetail = await query(
-      `SELECT c.id, c.is_group, c.title, c.last_message_at,
+      `SELECT c.id, c.is_group, c.title, c.school_id, c.last_message_at,
               u.id as other_user_id, u.first_name, u.last_name, u.email, u.role
        FROM conversations c
        JOIN users u ON (CASE WHEN c.user1_id = $1 THEN c.user2_id ELSE c.user1_id END) = u.id
@@ -447,6 +527,7 @@ const startGroupConversation = async (req, res, next) => {
   try {
     const { groupType, targetGradeLevel, targetSectionId, customTitle } = req.body;
     const userId = req.user.id;
+    const schoolId = req.user.school_id;
 
     if (!groupType) {
       return res.status(400).json({ success: false, message: 'Group type is required.' });
@@ -455,6 +536,11 @@ const startGroupConversation = async (req, res, next) => {
     let defaultTitle = customTitle;
     let existingSql = 'SELECT * FROM conversations WHERE is_group = TRUE AND group_type = $1';
     const existingParams = [groupType];
+
+    if (schoolId) {
+      existingParams.push(schoolId);
+      existingSql += ` AND (school_id = $${existingParams.length} OR (school_id IS NULL AND created_by IN (SELECT id FROM users WHERE school_id = $${existingParams.length})))`;
+    }
 
     if (groupType === 'TEACHERS') {
       defaultTitle = defaultTitle || 'Faculty Staff Group';
@@ -485,6 +571,9 @@ const startGroupConversation = async (req, res, next) => {
     const existingRes = await query(existingSql, existingParams);
     if (existingRes.rows.length > 0) {
       const conv = existingRes.rows[0];
+      if (!conv.school_id && schoolId) {
+        await query('UPDATE conversations SET school_id = $1 WHERE id = $2', [schoolId, conv.id]);
+      }
       let secName = null;
       if (conv.target_section_id) {
         const sRes = await query('SELECT section_name FROM sections WHERE id = $1', [conv.target_section_id]);
@@ -500,6 +589,7 @@ const startGroupConversation = async (req, res, next) => {
           target_grade_level: conv.target_grade_level,
           target_section_id: conv.target_section_id,
           section_name: secName,
+          school_id: conv.school_id || schoolId,
           last_message_at: conv.last_message_at,
         },
         isNew: false,
@@ -507,8 +597,8 @@ const startGroupConversation = async (req, res, next) => {
     }
 
     const insRes = await query(
-      `INSERT INTO conversations (is_group, title, group_type, target_grade_level, target_section_id, created_by, last_message_at)
-       VALUES (TRUE, $1, $2, $3, $4, $5, NOW())
+      `INSERT INTO conversations (is_group, title, group_type, target_grade_level, target_section_id, created_by, school_id, last_message_at)
+       VALUES (TRUE, $1, $2, $3, $4, $5, $6, NOW())
        RETURNING *`,
       [
         defaultTitle,
@@ -516,6 +606,7 @@ const startGroupConversation = async (req, res, next) => {
         targetGradeLevel ? parseInt(targetGradeLevel, 10) : null,
         targetSectionId ? parseInt(targetSectionId, 10) : null,
         userId,
+        schoolId || null,
       ]
     );
 
@@ -544,6 +635,7 @@ const startGroupConversation = async (req, res, next) => {
         target_grade_level: created.target_grade_level,
         target_section_id: created.target_section_id,
         section_name: createdSecName,
+        school_id: created.school_id,
         last_message_at: created.last_message_at,
       },
       isNew: true,
@@ -559,7 +651,7 @@ const startGroupConversation = async (req, res, next) => {
 const deleteConversation = async (req, res, next) => {
   try {
     const { conversationId } = req.params;
-    const { role, id: userId } = req.user;
+    const { role, id: userId, school_id: schoolId } = req.user;
 
     const convRes = await query('SELECT * FROM conversations WHERE id = $1', [conversationId]);
     if (convRes.rows.length === 0) {
@@ -568,7 +660,12 @@ const deleteConversation = async (req, res, next) => {
 
     const conv = convRes.rows[0];
 
-    // Admin can delete any conversation. Non-admins can only delete 1-on-1 chats they participate in.
+    // School check
+    if (schoolId && role !== 'superadmin' && conv.school_id && conv.school_id !== schoolId) {
+      return res.status(403).json({ success: false, message: 'You are not authorized to delete conversations from another school.' });
+    }
+
+    // Admin can delete any conversation in their school. Non-admins can only delete 1-on-1 chats they participate in.
     if (role !== 'admin' && role !== 'superadmin' && conv.user1_id !== userId && conv.user2_id !== userId) {
       return res.status(403).json({ success: false, message: 'You are not authorized to delete this conversation.' });
     }
@@ -591,12 +688,13 @@ const deleteConversation = async (req, res, next) => {
 };
 
 /**
- * Send a message (creates conversation if not exists and sends notification)
+ * Send a message (creates conversation if not exists and sends notification strictly within school)
  */
 const sendMessage = async (req, res, next) => {
   try {
     const { recipientId, conversationId, content } = req.body;
     const senderId = req.user.id;
+    const schoolId = req.user.school_id;
 
     if (!content || !content.trim()) {
       return res.status(400).json({ success: false, message: 'Message content cannot be empty.' });
@@ -609,18 +707,36 @@ const sendMessage = async (req, res, next) => {
         return res.status(400).json({ success: false, message: 'Recipient ID or Conversation ID is required.' });
       }
 
-      const u1 = Math.min(senderId, parseInt(recipientId, 10));
-      const u2 = Math.max(senderId, parseInt(recipientId, 10));
+      const rId = parseInt(recipientId, 10);
+      const recCheck = await query('SELECT id, school_id FROM users WHERE id = $1 AND is_active = TRUE', [rId]);
+      if (recCheck.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Recipient user not found or inactive.' });
+      }
+      if (schoolId && req.user.role !== 'superadmin' && recCheck.rows[0].school_id && recCheck.rows[0].school_id !== schoolId) {
+        return res.status(403).json({ success: false, message: 'Cannot send messages to a user from another school.' });
+      }
+
+      const u1 = Math.min(senderId, rId);
+      const u2 = Math.max(senderId, rId);
 
       const existingConv = await query('SELECT id FROM conversations WHERE user1_id = $1 AND user2_id = $2 AND is_group = FALSE', [u1, u2]);
       if (existingConv.rows.length > 0) {
         convId = existingConv.rows[0].id;
       } else {
         const newConv = await query(
-          'INSERT INTO conversations (is_group, user1_id, user2_id, last_message_at) VALUES (FALSE, $1, $2, NOW()) RETURNING id',
-          [u1, u2]
+          'INSERT INTO conversations (is_group, user1_id, user2_id, school_id, last_message_at) VALUES (FALSE, $1, $2, $3, NOW()) RETURNING id',
+          [u1, u2, schoolId || recCheck.rows[0].school_id || null]
         );
         convId = newConv.rows[0].id;
+      }
+    } else {
+      const convCheck = await query('SELECT * FROM conversations WHERE id = $1', [convId]);
+      if (convCheck.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Conversation not found.' });
+      }
+      const cObj = convCheck.rows[0];
+      if (schoolId && req.user.role !== 'superadmin' && cObj.school_id && cObj.school_id !== schoolId) {
+        return res.status(403).json({ success: false, message: 'Cannot send messages to a conversation from another school.' });
       }
     }
 
@@ -634,44 +750,72 @@ const sendMessage = async (req, res, next) => {
     // Update conversation timestamp
     await query('UPDATE conversations SET last_message_at = NOW() WHERE id = $1', [convId]);
 
-    // Send notifications to recipients
+    // Send notifications strictly within same school
     const convInfo = await query('SELECT * FROM conversations WHERE id = $1', [convId]);
     if (convInfo.rows.length > 0) {
       const conv = convInfo.rows[0];
+      const notifSchoolId = conv.school_id || schoolId;
+
       if (!conv.is_group) {
         const otherUserId = conv.user1_id === senderId ? conv.user2_id : conv.user1_id;
-        const targetUser = await query('SELECT role FROM users WHERE id = $1', [otherUserId]);
-        const targetRole = targetUser.rows[0]?.role || 'student';
-        const targetLink = `/${targetRole === 'admin' ? 'admin' : targetRole === 'teacher' ? 'teacher' : 'student'}/messages`;
+        const targetUser = await query('SELECT role, school_id FROM users WHERE id = $1', [otherUserId]);
+        if (targetUser.rows.length > 0) {
+          const targetRole = targetUser.rows[0]?.role || 'student';
+          const targetLink = `/${targetRole === 'admin' ? 'admin' : targetRole === 'teacher' ? 'teacher' : 'student'}/messages`;
 
-        await sendNotification({
-          userId: otherUserId,
-          title: `New message from ${req.user.firstName || 'Faculty/Staff'}`,
-          message: content.trim().slice(0, 100),
-          type: 'MESSAGE',
-          link: targetLink,
-        });
+          await sendNotification({
+            userId: otherUserId,
+            title: `New message from ${req.user.firstName || 'Faculty/Staff'}`,
+            message: content.trim().slice(0, 100),
+            type: 'MESSAGE',
+            link: targetLink,
+          });
+        }
       } else {
-        // Group notification broadcast
+        // Group notification broadcast strictly scoped to this school
         try {
-          let targetRoles = [];
           let targetUserIds = [];
 
           if (conv.group_type === 'TEACHERS') {
-            targetRoles = req.user.role === 'admin' ? ['teacher'] : ['admin', 'teacher'];
+            let tSql = "SELECT id FROM users WHERE role = 'teacher' AND is_active = TRUE";
+            const tParams = [];
+            if (notifSchoolId) {
+              tParams.push(notifSchoolId);
+              tSql += ` AND school_id = $${tParams.length}`;
+            }
+            const tRes = await query(tSql, tParams);
+            targetUserIds = tRes.rows.map(r => r.id).filter(id => id !== senderId);
           } else if (conv.group_type === 'ALL_STUDENTS') {
-            targetRoles = ['student'];
+            let stSql = "SELECT id FROM users WHERE role = 'student' AND is_active = TRUE";
+            const stParams = [];
+            if (notifSchoolId) {
+              stParams.push(notifSchoolId);
+              stSql += ` AND school_id = $${stParams.length}`;
+            }
+            const stRes = await query(stSql, stParams);
+            targetUserIds = stRes.rows.map(r => r.id).filter(id => id !== senderId);
           } else if (conv.group_type === 'GRADE') {
-            const stRes = await query('SELECT user_id FROM students WHERE current_grade_level = $1', [conv.target_grade_level]);
-            targetUserIds = stRes.rows.map(r => r.user_id).filter(id => id !== senderId);
+            let gSql = 'SELECT s.user_id FROM students s JOIN users u ON s.user_id = u.id WHERE s.current_grade_level = $1 AND u.is_active = TRUE';
+            const gParams = [conv.target_grade_level];
+            if (notifSchoolId) {
+              gParams.push(notifSchoolId);
+              gSql += ` AND (s.school_id = $${gParams.length} OR u.school_id = $${gParams.length})`;
+            }
+            const gRes = await query(gSql, gParams);
+            targetUserIds = gRes.rows.map(r => r.user_id).filter(id => id !== senderId);
           } else if (conv.group_type === 'SECTION') {
-            const stRes = await query('SELECT user_id FROM students WHERE current_section_id = $1', [conv.target_section_id]);
-            targetUserIds = stRes.rows.map(r => r.user_id).filter(id => id !== senderId);
+            let secSql = 'SELECT s.user_id FROM students s JOIN users u ON s.user_id = u.id WHERE s.current_section_id = $1 AND u.is_active = TRUE';
+            const secParams = [conv.target_section_id];
+            if (notifSchoolId) {
+              secParams.push(notifSchoolId);
+              secSql += ` AND (s.school_id = $${secParams.length} OR u.school_id = $${secParams.length})`;
+            }
+            const secRes = await query(secSql, secParams);
+            targetUserIds = secRes.rows.map(r => r.user_id).filter(id => id !== senderId);
           }
 
-          if (targetRoles.length > 0 || targetUserIds.length > 0) {
+          if (targetUserIds.length > 0) {
             await broadcastNotification({
-              roles: targetRoles,
               userIds: targetUserIds,
               title: `${conv.title}: New message from ${req.user.firstName || 'Admin'}`,
               message: content.trim().slice(0, 100),
@@ -786,7 +930,10 @@ const editMessage = async (req, res, next) => {
     }
 
     const msgCheck = await query(
-      'SELECT id, conversation_id, sender_id FROM messages WHERE id = $1',
+      `SELECT m.id, m.conversation_id, m.sender_id, c.school_id
+       FROM messages m
+       JOIN conversations c ON m.conversation_id = c.id
+       WHERE m.id = $1`,
       [messageId]
     );
 
@@ -795,6 +942,9 @@ const editMessage = async (req, res, next) => {
     }
 
     const message = msgCheck.rows[0];
+    if (req.user.school_id && req.user.role !== 'superadmin' && message.school_id && message.school_id !== req.user.school_id) {
+      return res.status(403).json({ success: false, message: 'You are not authorized to edit messages from another school.' });
+    }
 
     // Only the original author can edit
     if (message.sender_id !== userId) {
@@ -836,9 +986,13 @@ const deleteMessage = async (req, res, next) => {
     const { messageId } = req.params;
     const userId = req.user.id;
     const userRole = req.user.role;
+    const schoolId = req.user.school_id;
 
     const msgCheck = await query(
-      'SELECT id, conversation_id, sender_id FROM messages WHERE id = $1',
+      `SELECT m.id, m.conversation_id, m.sender_id, c.school_id
+       FROM messages m
+       JOIN conversations c ON m.conversation_id = c.id
+       WHERE m.id = $1`,
       [messageId]
     );
 
@@ -847,9 +1001,12 @@ const deleteMessage = async (req, res, next) => {
     }
 
     const message = msgCheck.rows[0];
+    if (schoolId && userRole !== 'superadmin' && message.school_id && message.school_id !== schoolId) {
+      return res.status(403).json({ success: false, message: 'You are not authorized to delete messages from another school.' });
+    }
 
-    // Allowed if sender or admin
-    if (message.sender_id !== userId && userRole !== 'admin') {
+    // Allowed if sender or school admin
+    if (message.sender_id !== userId && userRole !== 'admin' && userRole !== 'superadmin') {
       return res.status(403).json({ success: false, message: 'You are not authorized to delete this message.' });
     }
 
