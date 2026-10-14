@@ -70,6 +70,7 @@ app.get('/api/health', (req, res) => {
     system: 'High School Management System API (PERN Stack)',
     timestamp: new Date().toISOString(),
     version: '1.0.0',
+    buildId: 'v1.1-chat-demand-saas',
   });
 });
 

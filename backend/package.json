@@ -4,6 +4,7 @@
   "description": "Production High School Management System Backend - PERN Stack",
   "main": "src/server.js",
   "scripts": {
+    "build": "echo 'Backend build successful'",
     "start": "node src/server.js",
     "predev": "fuser -k 5000/tcp 2>/dev/null || true",
     "dev": "node --watch src/server.js",
