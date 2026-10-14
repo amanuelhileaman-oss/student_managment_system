@@ -64,8 +64,9 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
   const [contactSearch, setContactSearch] = useState('');
   const [contactRoleFilter, setContactRoleFilter] = useState('ALL');
 
-  // Group chat creation and modal tabs
-  const [modalTab, setModalTab] = useState('direct'); // 'direct' | 'group'
+  // Group chat creation, modal demands and sections
+  const [modalTab, setModalTab] = useState('section'); // 'section' | 'grade' | 'teachers' | 'all_students' | 'direct'
+  const [sectionGradeFilter, setSectionGradeFilter] = useState('ALL');
   const [sectionsList, setSectionsList] = useState([]);
   const [selectedGroupGrade, setSelectedGroupGrade] = useState(9);
   const [selectedSectionId, setSelectedSectionId] = useState('');
@@ -80,7 +81,13 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
 
   const messagesEndRef = useRef(null);
   const messageContainerRef = useRef(null);
+  const activeConvRef = useRef(null);
   const [showScrollDown, setShowScrollDown] = useState(false);
+
+  // Synchronize ref with state to prevent stale closure bugs
+  useEffect(() => {
+    activeConvRef.current = activeConv;
+  }, [activeConv]);
 
   const scrollToBottom = (behavior = 'smooth') => {
     messagesEndRef.current?.scrollIntoView({ behavior });
@@ -91,21 +98,40 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
     setTimeout(() => setInfoToast(''), 3000);
   };
 
-  const fetchConversations = async (silent = false) => {
+  const selectConversation = (conv) => {
+    if (!conv) {
+      activeConvRef.current = null;
+      setActiveConv(null);
+      setMessages([]);
+      return;
+    }
+    activeConvRef.current = conv;
+    setActiveConv(conv);
+    setMessages([]);
+    setNewMsg('');
+    fetchMessages(conv.id);
+  };
+
+  const fetchConversations = async (silent = false, targetConv = null) => {
     if (!silent) setIsRefreshingConv(true);
     try {
       const res = await api.get('/communications/conversations');
       const convList = res.data.data || [];
       setConversations(convList);
 
-      // Default select first conversation if none selected, or keep active updated
-      if (!silent && !activeConv && convList.length > 0) {
-        setActiveConv(convList[0]);
-      } else if (activeConv) {
-        const found = convList.find((c) => c.id === activeConv.id);
+      const target = targetConv || activeConvRef.current;
+      if (target?.id) {
+        const found = convList.find((c) => c.id === target.id);
         if (found) {
-          setActiveConv((prev) => ({ ...prev, ...found }));
+          const merged = { ...target, ...found };
+          activeConvRef.current = merged;
+          setActiveConv(merged);
+        } else if (targetConv) {
+          activeConvRef.current = targetConv;
+          setActiveConv(targetConv);
         }
+      } else if (!silent && convList.length > 0) {
+        selectConversation(convList[0]);
       }
     } catch (err) {
       if (!silent) setError('Unable to load conversations.');
@@ -150,15 +176,16 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
   useEffect(() => {
     const handleGlobalRefresh = () => {
       fetchConversations(false);
-      if (activeConv) {
-        fetchMessages(activeConv.id, false);
+      const curr = activeConvRef.current;
+      if (curr?.id) {
+        fetchMessages(curr.id, false);
       }
       showToast('Chat data synchronized');
     };
 
     window.addEventListener('stude:refresh', handleGlobalRefresh);
     return () => window.removeEventListener('stude:refresh', handleGlobalRefresh);
-  }, [activeConv]);
+  }, []);
 
   // Poll conversations every 6 seconds
   useEffect(() => {
@@ -170,14 +197,14 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
 
   // Fetch messages when active conversation changes & poll every 3 seconds for responsive chat
   useEffect(() => {
-    if (activeConv) {
-      fetchMessages(activeConv.id);
+    if (activeConv?.id) {
+      fetchMessages(activeConv.id, true);
       const msgInterval = setInterval(() => {
         fetchMessages(activeConv.id, true);
       }, 3000);
       return () => clearInterval(msgInterval);
     }
-  }, [activeConv]);
+  }, [activeConv?.id]);
 
   // Auto scroll to bottom when messages update (unless user scrolled up)
   useEffect(() => {
@@ -210,9 +237,7 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
   const handleOpenContacts = () => {
     setShowContactsModal(true);
     fetchContacts();
-    if (user?.role === 'admin' || user?.role === 'superadmin') {
-      fetchSections();
-    }
+    fetchSections();
   };
 
   const handleStartGroup = async ({ groupType, targetGradeLevel, targetSectionId, customTitle }) => {
@@ -226,9 +251,9 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
       });
       setShowContactsModal(false);
       const conv = res.data.data;
-      await fetchConversations(true);
-      setActiveConv(conv);
-      showToast(`Group chat "${conv.title}" opened.`);
+      selectConversation(conv);
+      await fetchConversations(true, conv);
+      showToast(`Group channel "${conv.title}" active`);
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to open group chat.');
     } finally {
@@ -237,14 +262,15 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
   };
 
   const handleDeleteConversation = async () => {
-    if (!activeConv) return;
+    const curr = activeConvRef.current || activeConv;
+    if (!curr) return;
     setDeletingConv(true);
     try {
-      await api.delete(`/communications/conversations/${activeConv.id}`);
-      showToast(activeConv.is_group ? 'Group chat deleted successfully.' : 'Conversation deleted successfully.');
+      await api.delete(`/communications/conversations/${curr.id}`);
+      showToast(curr.is_group ? 'Group chat deleted successfully.' : 'Conversation deleted successfully.');
       setDeleteConvModalOpen(false);
-      setActiveConv(null);
-      await fetchConversations(true);
+      selectConversation(null);
+      await fetchConversations(false);
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to delete conversation.');
     } finally {
@@ -259,9 +285,9 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
       });
       setShowContactsModal(false);
       const conv = res.data.data;
-      setActiveConv(conv);
-      await fetchConversations(true);
-      showToast(`Direct message opened with ${contact.first_name}`);
+      selectConversation(conv);
+      await fetchConversations(true, conv);
+      showToast(`Direct message with ${contact.first_name} ${contact.last_name} active`);
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to start conversation.');
     }
@@ -269,7 +295,8 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
 
   const handleSendMessage = async (e) => {
     if (e) e.preventDefault();
-    if (!newMsg.trim() || !activeConv || sending) return;
+    const currentConv = activeConvRef.current || activeConv;
+    if (!newMsg.trim() || !currentConv?.id || sending) return;
 
     const contentToSend = newMsg.trim();
     setNewMsg('');
@@ -277,10 +304,10 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
 
     try {
       await api.post('/communications/messages', {
-        conversationId: activeConv.id,
+        conversationId: currentConv.id,
         content: contentToSend,
       });
-      await fetchMessages(activeConv.id, true);
+      await fetchMessages(currentConv.id, true);
       await fetchConversations(true);
       scrollToBottom();
     } catch (err) {
@@ -490,7 +517,7 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
                 return (
                   <button
                     key={c.id}
-                    onClick={() => setActiveConv(c)}
+                    onClick={() => selectConversation(c)}
                     className={`w-full p-3.5 text-left flex items-start gap-3 transition-colors ${
                       isSelected
                         ? 'bg-primary-50/80 dark:bg-primary-950/40 border-l-4 border-primary-600'
@@ -944,278 +971,475 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
         )}
       </div>
 
-      {/* New Conversation Contacts Modal */}
+      {/* Start New Conversation • Demand Selector Modal */}
       {showContactsModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl overflow-hidden flex flex-col max-h-[85vh]">
+          <div className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[88vh] animate-in fade-in zoom-in-95 duration-200">
             {/* Modal Header */}
-            <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
-              <div>
-                <h3 className="font-bold text-base text-slate-900 dark:text-slate-100">
-                  New Direct Message
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Select a contact to start an official direct conversation
-                </p>
+            <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-white dark:bg-slate-900 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-primary-600 to-indigo-600 text-white flex items-center justify-center shadow-sm shrink-0">
+                  <MessageSquare className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                    <span>Start New Conversation</span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-primary-100 dark:bg-primary-950/70 text-primary-700 dark:text-primary-300 border border-primary-200 dark:border-primary-800">
+                      Demand Selector
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Select your communication demand: Class Section, Grade Level, Teachers, All Students, or Direct User
+                  </p>
+                </div>
               </div>
               <button
                 type="button"
                 onClick={() => setShowContactsModal(false)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Modal Tabs: Single Direct Chat vs Group Chat */}
-            {(user?.role === 'admin' || user?.role === 'superadmin') && (
-              <div className="flex border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/60 px-4 pt-2 gap-4">
+            {/* Demand Category Switcher Bar */}
+            <div className="p-3 bg-slate-50/80 dark:bg-slate-950/60 border-b border-slate-200 dark:border-slate-800 shrink-0">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2 px-1">
+                Choose Communication Demand:
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                {/* 1. Class Section */}
+                <button
+                  type="button"
+                  onClick={() => setModalTab('section')}
+                  className={`p-2.5 rounded-xl border text-left transition-all flex flex-col justify-between ${
+                    modalTab === 'section'
+                      ? 'bg-amber-500/10 border-amber-500 text-amber-900 dark:text-amber-200 ring-2 ring-amber-500/30 shadow-xs'
+                      : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-amber-400/60'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 mb-1 text-amber-600 dark:text-amber-400">
+                    <Layers className="w-4 h-4 shrink-0" />
+                    <span className="font-bold text-xs">Class Section</span>
+                  </div>
+                  <span className="text-[10px] text-slate-500 dark:text-slate-400 line-clamp-1">
+                    Grade &amp; Section groups
+                  </span>
+                </button>
+
+                {/* 2. Grade Level */}
+                <button
+                  type="button"
+                  onClick={() => setModalTab('grade')}
+                  className={`p-2.5 rounded-xl border text-left transition-all flex flex-col justify-between ${
+                    modalTab === 'grade'
+                      ? 'bg-emerald-500/10 border-emerald-500 text-emerald-900 dark:text-emerald-200 ring-2 ring-emerald-500/30 shadow-xs'
+                      : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-emerald-400/60'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 mb-1 text-emerald-600 dark:text-emerald-400">
+                    <BookOpen className="w-4 h-4 shrink-0" />
+                    <span className="font-bold text-xs">Grade Level</span>
+                  </div>
+                  <span className="text-[10px] text-slate-500 dark:text-slate-400 line-clamp-1">
+                    Grades 9, 10, 11, 12
+                  </span>
+                </button>
+
+                {/* 3. Faculty Teachers */}
+                <button
+                  type="button"
+                  onClick={() => setModalTab('teachers')}
+                  className={`p-2.5 rounded-xl border text-left transition-all flex flex-col justify-between ${
+                    modalTab === 'teachers'
+                      ? 'bg-purple-500/10 border-purple-500 text-purple-900 dark:text-purple-200 ring-2 ring-purple-500/30 shadow-xs'
+                      : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-purple-400/60'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 mb-1 text-purple-600 dark:text-purple-400">
+                    <GraduationCap className="w-4 h-4 shrink-0" />
+                    <span className="font-bold text-xs">Faculty Staff</span>
+                  </div>
+                  <span className="text-[10px] text-slate-500 dark:text-slate-400 line-clamp-1">
+                    All Teachers Group
+                  </span>
+                </button>
+
+                {/* 4. All Students */}
+                <button
+                  type="button"
+                  onClick={() => setModalTab('all_students')}
+                  className={`p-2.5 rounded-xl border text-left transition-all flex flex-col justify-between ${
+                    modalTab === 'all_students'
+                      ? 'bg-blue-500/10 border-blue-500 text-blue-900 dark:text-blue-200 ring-2 ring-blue-500/30 shadow-xs'
+                      : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-blue-400/60'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 mb-1 text-blue-600 dark:text-blue-400">
+                    <Users className="w-4 h-4 shrink-0" />
+                    <span className="font-bold text-xs">All Students</span>
+                  </div>
+                  <span className="text-[10px] text-slate-500 dark:text-slate-400 line-clamp-1">
+                    School-wide Chat
+                  </span>
+                </button>
+
+                {/* 5. Single User (1-on-1) */}
                 <button
                   type="button"
                   onClick={() => setModalTab('direct')}
-                  className={`pb-2.5 px-2 text-xs font-bold border-b-2 transition-all flex items-center gap-1.5 ${
+                  className={`p-2.5 rounded-xl border text-left transition-all flex flex-col justify-between col-span-2 sm:col-span-1 ${
                     modalTab === 'direct'
-                      ? 'border-primary-600 text-primary-600 dark:text-primary-400'
-                      : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                      ? 'bg-primary-500/10 border-primary-500 text-primary-900 dark:text-primary-200 ring-2 ring-primary-500/30 shadow-xs'
+                      : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-primary-400/60'
                   }`}
                 >
-                  <User className="w-3.5 h-3.5" />
-                  <span>Single User (1-on-1)</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setModalTab('group')}
-                  className={`pb-2.5 px-2 text-xs font-bold border-b-2 transition-all flex items-center gap-1.5 ${
-                    modalTab === 'group'
-                      ? 'border-primary-600 text-primary-600 dark:text-primary-400'
-                      : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-                  }`}
-                >
-                  <Users className="w-3.5 h-3.5" />
-                  <span>Group Chat (Grades, Sections &amp; Staff)</span>
+                  <div className="flex items-center gap-1.5 mb-1 text-primary-600 dark:text-primary-400">
+                    <User className="w-4 h-4 shrink-0" />
+                    <span className="font-bold text-xs">Single User</span>
+                  </div>
+                  <span className="text-[10px] text-slate-500 dark:text-slate-400 line-clamp-1">
+                    1-on-1 Direct Chat
+                  </span>
                 </button>
               </div>
-            )}
+            </div>
 
-            {modalTab === 'group' && (user?.role === 'admin' || user?.role === 'superadmin') ? (
-              /* Group Channels Launch Hub */
-              <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                {/* 1. Faculty Staff Group */}
-                <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-purple-100 dark:bg-purple-950/70 text-purple-600 dark:text-purple-300 flex items-center justify-center shrink-0">
-                      <GraduationCap className="w-5 h-5" />
-                    </div>
+            {/* Modal Body / Active Demand Content */}
+            <div className="flex-1 overflow-y-auto p-4">
+              {/* Demand 1: Class Section */}
+              {modalTab === 'section' && (
+                <div className="space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
                     <div>
-                      <h4 className="font-bold text-xs sm:text-sm text-slate-900 dark:text-slate-100">
-                        All Faculty Teachers Group
+                      <h4 className="font-bold text-sm text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                        <Layers className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                        <span>Chat by Class Section</span>
                       </h4>
-                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                        Chat directly with all active faculty and teaching staff.
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                        Select any section to start or open its official group channel.
                       </p>
                     </div>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={creatingGroup}
-                    onClick={() => handleStartGroup({ groupType: 'TEACHERS' })}
-                    className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 active:scale-95 text-white font-semibold text-xs shadow-xs transition-all disabled:opacity-50 shrink-0"
-                  >
-                    Open Group
-                  </button>
-                </div>
 
-                {/* 2. All Students Group */}
-                <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-blue-100 dark:bg-blue-950/70 text-blue-600 dark:text-blue-300 flex items-center justify-center shrink-0">
-                      <Users className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <h4 className="font-bold text-xs sm:text-sm text-slate-900 dark:text-slate-100">
-                        All Students (School-wide)
-                      </h4>
-                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                        School-wide group chat for all registered high school students.
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={creatingGroup}
-                    onClick={() => handleStartGroup({ groupType: 'ALL_STUDENTS' })}
-                    className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-semibold text-xs shadow-xs transition-all disabled:opacity-50 shrink-0"
-                  >
-                    Open Group
-                  </button>
-                </div>
-
-                {/* 3. By Grade Level */}
-                <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 space-y-2.5">
-                  <div className="flex items-center gap-2">
-                    <BookOpen className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                    <h4 className="font-bold text-xs sm:text-sm text-slate-900 dark:text-slate-100">
-                      Chat by Grade Level (Targeted)
-                    </h4>
-                  </div>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                    Open an interactive group chat for an entire specific grade:
-                  </p>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
-                    {[9, 10, 11, 12].map((lvl) => (
-                      <button
-                        key={lvl}
-                        type="button"
-                        disabled={creatingGroup}
-                        onClick={() => handleStartGroup({ groupType: 'GRADE', targetGradeLevel: lvl })}
-                        className="py-2 px-3 rounded-xl bg-white dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 border border-slate-200 dark:border-slate-700 hover:border-emerald-400 dark:hover:border-emerald-600 font-bold text-xs text-slate-800 dark:text-slate-200 hover:text-emerald-700 dark:hover:text-emerald-300 transition-all text-center shadow-2xs"
-                      >
-                        Grade {lvl} Group
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* 4. By Class Section */}
-                <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 space-y-2.5">
-                  <div className="flex items-center gap-2">
-                    <Layers className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-                    <h4 className="font-bold text-xs sm:text-sm text-slate-900 dark:text-slate-100">
-                      Chat by Class Section
-                    </h4>
-                  </div>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                    Start or open a direct section channel for a specific class section:
-                  </p>
-                  <div className="flex flex-col sm:flex-row gap-2 pt-1">
-                    <select
-                      value={selectedSectionId}
-                      onChange={(e) => setSelectedSectionId(e.target.value)}
-                      className="flex-1 px-3 py-2 text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-primary-500"
-                    >
-                      {sectionsList.map((sec) => (
-                        <option key={sec.id} value={sec.id}>
-                          Grade {sec.grade_level} - Section {sec.section_name} ({sec.stream_code || 'General'})
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      disabled={creatingGroup || !selectedSectionId}
-                      onClick={() => {
-                        const targetSec = sectionsList.find((s) => s.id === parseInt(selectedSectionId, 10));
-                        handleStartGroup({
-                          groupType: 'SECTION',
-                          targetSectionId: selectedSectionId,
-                          targetGradeLevel: targetSec?.grade_level || 9,
-                        });
-                      }}
-                      className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 active:scale-95 text-white font-bold text-xs shadow-xs transition-all disabled:opacity-50 shrink-0"
-                    >
-                      Open Section Chat
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              /* Direct 1-on-1 Contact Picker */
-              <>
-                {/* Filter Tabs & Search */}
-                <div className="p-3 border-b border-slate-100 dark:border-slate-800 space-y-2">
-                  <div className="relative">
-                    <Search className="w-3.5 h-3.5 absolute left-3 top-3 text-slate-400" />
-                    <input
-                      type="text"
-                      value={contactSearch}
-                      onChange={(e) => setContactSearch(e.target.value)}
-                      placeholder="Search contacts by name, email, or subject..."
-                      className="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-1 focus:ring-primary-500 text-slate-800 dark:text-slate-200"
-                    />
-                  </div>
-
-                  {/* Role filter tabs */}
-                  <div className="flex gap-1">
-                    {['ALL', 'TEACHER', 'STUDENT', 'ADMIN'].map((tab) => (
-                      <button
-                        key={tab}
-                        type="button"
-                        onClick={() => setContactRoleFilter(tab)}
-                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-colors ${
-                          contactRoleFilter === tab
-                            ? 'bg-primary-600 text-white shadow-xs'
-                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
-                        }`}
-                      >
-                        {tab === 'ALL' ? 'All Roles' : tab + 's'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Contacts Directory List */}
-                <div className="flex-1 overflow-y-auto p-2 divide-y divide-slate-100 dark:divide-slate-800">
-                  {loadingContacts ? (
-                    <div className="p-8 text-center text-slate-400 text-xs">
-                      Loading available contacts...
-                    </div>
-                  ) : filteredContacts.length > 0 ? (
-                    filteredContacts.map((contact) => {
-                      const badge = roleBadges[contact.role] || roleBadges.student;
-                      const RoleIcon = badge.icon;
-
-                      return (
-                        <div
-                          key={contact.id}
-                          onClick={() => handleStartWithContact(contact)}
-                          className="p-3 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/60 cursor-pointer flex items-center justify-between transition-colors"
+                    {/* Grade Level Filter Buttons */}
+                    <div className="flex items-center gap-1 shrink-0">
+                      {['ALL', '9', '10', '11', '12'].map((g) => (
+                        <button
+                          key={g}
+                          type="button"
+                          onClick={() => setSectionGradeFilter(g)}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                            sectionGradeFilter === g
+                              ? 'bg-amber-600 text-white shadow-xs'
+                              : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+                          }`}
                         >
-                          <div className="flex items-center gap-3">
-                            <div className="w-9 h-9 rounded-xl bg-slate-200 dark:bg-slate-700 flex items-center justify-center font-bold text-xs text-slate-700 dark:text-slate-300 shrink-0">
-                              {contact.first_name?.[0] || 'U'}
+                          {g === 'ALL' ? 'All' : `G-${g}`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Sections List Cards */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {sectionsList
+                      .filter((sec) => sectionGradeFilter === 'ALL' || sec.grade_level === parseInt(sectionGradeFilter, 10))
+                      .map((sec) => (
+                        <div
+                          key={sec.id}
+                          className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800/60 hover:border-amber-500/70 hover:shadow-md transition-all flex items-center justify-between gap-3 group"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div className="w-10 h-10 rounded-xl bg-amber-100 dark:bg-amber-950/70 text-amber-700 dark:text-amber-300 font-bold text-xs flex items-center justify-center shrink-0">
+                              {sec.section_name}
                             </div>
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <span className="font-semibold text-xs text-slate-900 dark:text-slate-100">
-                                  {contact.first_name} {contact.last_name}
-                                </span>
-                                <span
-                                  className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded border inline-flex items-center gap-0.5 ${badge.style}`}
-                                >
-                                  <RoleIcon className="w-2.5 h-2.5" />
-                                  <span>{badge.label}</span>
-                                </span>
+                            <div className="min-w-0">
+                              <h5 className="font-bold text-xs sm:text-sm text-slate-900 dark:text-slate-100 truncate">
+                                Grade {sec.grade_level} - Sec {sec.section_name}
+                              </h5>
+                              <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                                {sec.stream_code || sec.stream_name || 'General Stream'}
                               </div>
-                              <span className="text-[11px] text-slate-400 block">{contact.email}</span>
-                              {contact.specialization && (
-                                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">
-                                  Dept: {contact.specialization}
-                                </span>
-                              )}
-                              {contact.student_id && (
-                                <span className="text-[10px] text-blue-600 dark:text-blue-400 font-medium">
-                                  ID: {contact.student_id} {contact.section_name ? `• ${contact.section_name}` : ''}
-                                </span>
-                              )}
                             </div>
                           </div>
 
                           <button
                             type="button"
-                            className="px-3 py-1.5 rounded-lg bg-primary-50 dark:bg-primary-950/60 text-primary-600 dark:text-primary-400 hover:bg-primary-100 font-bold text-xs border border-primary-200 dark:border-primary-800 transition-all"
+                            disabled={creatingGroup}
+                            onClick={() =>
+                              handleStartGroup({
+                                groupType: 'SECTION',
+                                targetSectionId: sec.id,
+                                targetGradeLevel: sec.grade_level,
+                                customTitle: `Grade ${sec.grade_level} - Section ${sec.section_name} Group`,
+                              })
+                            }
+                            className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 active:scale-95 text-white font-bold text-xs shadow-xs flex items-center gap-1 transition-all disabled:opacity-50 shrink-0"
                           >
-                            Message
+                            <span>Open</span>
+                            <span>→</span>
                           </button>
                         </div>
-                      );
-                    })
-                  ) : (
-                    <div className="p-8 text-center text-slate-400 text-xs">
-                      No contacts found matching your query.
-                    </div>
-                  )}
+                      ))}
+
+                    {sectionsList.length === 0 && (
+                      <div className="col-span-2 p-8 text-center text-slate-400 text-xs">
+                        No sections configured in academic records.
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </>
-            )}
+              )}
+
+              {/* Demand 2: Grade Level */}
+              {modalTab === 'grade' && (
+                <div className="space-y-4">
+                  <div>
+                    <h4 className="font-bold text-sm text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                      <BookOpen className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                      <span>Chat by Grade Level (Targeted Channel)</span>
+                    </h4>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                      Open an interactive group channel for an entire grade level across all sections.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2.5">
+                    {[9, 10, 11, 12].map((lvl) => (
+                      <div
+                        key={lvl}
+                        className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800/60 hover:border-emerald-500 hover:shadow-md transition-all flex items-center justify-between gap-3"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-11 h-11 rounded-xl bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 font-bold text-sm flex items-center justify-center shrink-0">
+                            G-{lvl}
+                          </div>
+                          <div>
+                            <h5 className="font-bold text-sm text-slate-900 dark:text-slate-100">
+                              Grade {lvl} - All Students Channel
+                            </h5>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">
+                              Targeted broadcast and interactive group discussion for all Grade {lvl} students.
+                            </p>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          disabled={creatingGroup}
+                          onClick={() =>
+                            handleStartGroup({
+                              groupType: 'GRADE',
+                              targetGradeLevel: lvl,
+                              customTitle: `Grade ${lvl} - All Students Group`,
+                            })
+                          }
+                          className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs shadow-xs flex items-center gap-1.5 transition-all disabled:opacity-50 shrink-0"
+                        >
+                          <span>Open Grade {lvl} Chat</span>
+                          <span>→</span>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Demand 3: Faculty Teachers */}
+              {modalTab === 'teachers' && (
+                <div className="space-y-4">
+                  <div className="p-4 rounded-xl border border-purple-200 dark:border-purple-800/60 bg-purple-50/50 dark:bg-purple-950/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-xl bg-purple-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                        <GraduationCap className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <h4 className="font-bold text-sm sm:text-base text-slate-900 dark:text-slate-100">
+                          All Faculty Teachers Group
+                        </h4>
+                        <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5">
+                          Official real-time group channel for all registered teachers and academic faculty.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={creatingGroup}
+                      onClick={() => handleStartGroup({ groupType: 'TEACHERS', customTitle: 'Faculty Staff Group' })}
+                      className="px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 active:scale-95 text-white font-bold text-xs shadow-sm flex items-center justify-center gap-1.5 transition-all disabled:opacity-50 shrink-0"
+                    >
+                      <span>Open Faculty Group</span>
+                      <span>→</span>
+                    </button>
+                  </div>
+
+                  <div className="pt-1">
+                    <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
+                      Or message an individual teacher directly:
+                    </div>
+                    <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                      {contacts
+                        .filter((c) => c.role === 'teacher')
+                        .map((t) => (
+                          <div
+                            key={t.id}
+                            onClick={() => handleStartWithContact(t)}
+                            className="p-3 rounded-xl border border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 cursor-pointer flex items-center justify-between transition-colors"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 flex items-center justify-center font-bold text-xs">
+                                {t.first_name?.[0]}
+                              </div>
+                              <div>
+                                <span className="font-semibold text-xs text-slate-900 dark:text-slate-100">
+                                  {t.first_name} {t.last_name}
+                                </span>
+                                <span className="text-[11px] text-slate-400 block">{t.specialization || t.email}</span>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              className="px-3 py-1.5 rounded-lg bg-primary-50 dark:bg-primary-950/60 text-primary-600 dark:text-primary-400 text-xs font-bold border border-primary-200 dark:border-primary-800 hover:bg-primary-100"
+                            >
+                              Message
+                            </button>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Demand 4: All Students */}
+              {modalTab === 'all_students' && (
+                <div className="space-y-4">
+                  <div className="p-5 rounded-2xl border border-blue-200 dark:border-blue-800/60 bg-blue-50/50 dark:bg-blue-950/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="flex items-center gap-3.5">
+                      <div className="w-12 h-12 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                        <Users className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <h4 className="font-bold text-sm sm:text-base text-slate-900 dark:text-slate-100">
+                          All Students Group (School-wide)
+                        </h4>
+                        <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5">
+                          Broadcast announcements and coordinate discussions with every student across all grades and sections.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={creatingGroup}
+                      onClick={() => handleStartGroup({ groupType: 'ALL_STUDENTS', customTitle: 'All Students (School-wide)' })}
+                      className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold text-xs shadow-sm flex items-center justify-center gap-1.5 transition-all disabled:opacity-50 shrink-0"
+                    >
+                      <span>Open School-wide Chat</span>
+                      <span>→</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Demand 5: Single User (1-on-1 Direct Chat) */}
+              {modalTab === 'direct' && (
+                <div className="space-y-3">
+                  {/* Filter Tabs & Search */}
+                  <div className="space-y-2">
+                    <div className="relative">
+                      <Search className="w-3.5 h-3.5 absolute left-3 top-3 text-slate-400" />
+                      <input
+                        type="text"
+                        value={contactSearch}
+                        onChange={(e) => setContactSearch(e.target.value)}
+                        placeholder="Search contacts by name, email, or student ID..."
+                        className="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-1 focus:ring-primary-500 text-slate-800 dark:text-slate-200"
+                      />
+                    </div>
+
+                    {/* Role filter tabs */}
+                    <div className="flex gap-1">
+                      {['ALL', 'TEACHER', 'STUDENT', 'ADMIN'].map((tab) => (
+                        <button
+                          key={tab}
+                          type="button"
+                          onClick={() => setContactRoleFilter(tab)}
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-colors ${
+                            contactRoleFilter === tab
+                              ? 'bg-primary-600 text-white shadow-xs'
+                              : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                          }`}
+                        >
+                          {tab === 'ALL' ? 'All Roles' : tab + 's'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Contacts Directory List */}
+                  <div className="divide-y divide-slate-100 dark:divide-slate-800 max-h-72 overflow-y-auto pr-1">
+                    {loadingContacts ? (
+                      <div className="p-8 text-center text-slate-400 text-xs">
+                        Loading available contacts...
+                      </div>
+                    ) : filteredContacts.length > 0 ? (
+                      filteredContacts.map((contact) => {
+                        const badge = roleBadges[contact.role] || roleBadges.student;
+                        const RoleIcon = badge.icon;
+
+                        return (
+                          <div
+                            key={contact.id}
+                            onClick={() => handleStartWithContact(contact)}
+                            className="p-3 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/60 cursor-pointer flex items-center justify-between transition-colors"
+                          >
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="w-9 h-9 rounded-xl bg-slate-200 dark:bg-slate-700 flex items-center justify-center font-bold text-xs text-slate-700 dark:text-slate-300 shrink-0">
+                                {contact.first_name?.[0] || 'U'}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-semibold text-xs text-slate-900 dark:text-slate-100 truncate">
+                                    {contact.first_name} {contact.last_name}
+                                  </span>
+                                  <span
+                                    className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded border inline-flex items-center gap-0.5 shrink-0 ${badge.style}`}
+                                  >
+                                    <RoleIcon className="w-2.5 h-2.5" />
+                                    <span>{badge.label}</span>
+                                  </span>
+                                </div>
+                                <span className="text-[11px] text-slate-400 block truncate">{contact.email}</span>
+                                {contact.specialization && (
+                                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">
+                                    Dept: {contact.specialization}
+                                  </span>
+                                )}
+                                {contact.student_id && (
+                                  <span className="text-[10px] text-blue-600 dark:text-blue-400 font-medium">
+                                    ID: {contact.student_id} {contact.section_name ? `• ${contact.section_name}` : ''}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            <button
+                              type="button"
+                              className="px-3 py-1.5 rounded-lg bg-primary-50 dark:bg-primary-950/60 text-primary-600 dark:text-primary-400 hover:bg-primary-100 font-bold text-xs border border-primary-200 dark:border-primary-800 transition-all shrink-0"
+                            >
+                              Message
+                            </button>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="p-8 text-center text-slate-400 text-xs">
+                        No contacts found matching your query.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

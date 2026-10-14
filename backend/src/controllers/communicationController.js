@@ -485,6 +485,11 @@ const startGroupConversation = async (req, res, next) => {
     const existingRes = await query(existingSql, existingParams);
     if (existingRes.rows.length > 0) {
       const conv = existingRes.rows[0];
+      let secName = null;
+      if (conv.target_section_id) {
+        const sRes = await query('SELECT section_name FROM sections WHERE id = $1', [conv.target_section_id]);
+        secName = sRes.rows[0]?.section_name || null;
+      }
       return res.json({
         success: true,
         data: {
@@ -494,6 +499,7 @@ const startGroupConversation = async (req, res, next) => {
           group_type: conv.group_type,
           target_grade_level: conv.target_grade_level,
           target_section_id: conv.target_section_id,
+          section_name: secName,
           last_message_at: conv.last_message_at,
         },
         isNew: false,
@@ -514,6 +520,11 @@ const startGroupConversation = async (req, res, next) => {
     );
 
     const created = insRes.rows[0];
+    let createdSecName = null;
+    if (created.target_section_id) {
+      const sRes = await query('SELECT section_name FROM sections WHERE id = $1', [created.target_section_id]);
+      createdSecName = sRes.rows[0]?.section_name || null;
+    }
 
     await logAudit({
       userId,
@@ -532,6 +543,7 @@ const startGroupConversation = async (req, res, next) => {
         group_type: created.group_type,
         target_grade_level: created.target_grade_level,
         target_section_id: created.target_section_id,
+        section_name: createdSecName,
         last_message_at: created.last_message_at,
       },
       isNew: true,
