@@ -73,6 +73,27 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+const cloudinaryService = require('./services/cloudinaryService');
+
+// Universal resilient document streaming and download proxy
+app.get('/api/common/download', async (req, res, next) => {
+  try {
+    const fileUrl = req.query.url;
+    const fileName = req.query.name || 'document';
+    if (!fileUrl) {
+      return res.status(400).json({ success: false, message: 'File URL parameter is required.' });
+    }
+    return cloudinaryService.streamFileToResponse({
+      fileUrl,
+      fileName,
+      isInline: req.query.inline === 'true',
+      res,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Mount Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/academic', academicRoutes);

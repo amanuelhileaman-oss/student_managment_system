@@ -270,11 +270,11 @@ const registerStudent = async (req, res, next) => {
         try {
           const fileBuffer = req.file.buffer || (req.file.path ? fs.readFileSync(req.file.path) : null);
           if (fileBuffer) {
-            const cloudResult = await cloudinaryService.uploadBuffer(
-              fileBuffer,
-              req.file.originalname,
-              'ethio_highhub/grade8_certificates'
-            );
+            const cloudResult = await cloudinaryService.uploadBuffer(fileBuffer, {
+              folder: 'ethio_highhub/grade8_certificates',
+              originalName: req.file.originalname,
+              resourceType: 'raw',
+            });
             grade8Document = cloudResult.secure_url;
           } else {
             grade8Document = `/uploads/assignments/${req.file.filename}`;

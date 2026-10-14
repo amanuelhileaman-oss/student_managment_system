@@ -1,28 +1,8 @@
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
 
-// Ensure upload directory exists
-const materialsDir = path.join(__dirname, '../../uploads/materials');
-if (!fs.existsSync(materialsDir)) {
-  fs.mkdirSync(materialsDir, { recursive: true });
-}
-
-// Storage configuration
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, materialsDir);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    const baseName = path
-      .basename(file.originalname, ext)
-      .replace(/[^a-zA-Z0-9_-]/g, '_')
-      .slice(0, 60);
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e6);
-    cb(null, `${baseName}-${uniqueSuffix}${ext}`);
-  },
-});
+// Memory storage keeps textbooks, PPTs, and study materials in RAM for direct Cloudinary streaming
+const storage = multer.memoryStorage();
 
 // File filter accepting PDF, Word, PowerPoint, Excel, Ebooks, Text, Archives, and Media across all devices
 const allowedExtensions = /\.(pdf|doc|docx|ppt|pptx|xls|xlsx|txt|rtf|odt|ods|odp|epub|mobi|zip|rar|7z|csv|png|jpg|jpeg|webp)$/i;
@@ -62,6 +42,10 @@ const fileFilter = (req, file, cb) => {
       else if (mime.startsWith('image/')) file.originalname = `${originalName}.jpg`;
       else file.originalname = `${originalName}.pdf`;
     }
+    // Pre-calculate safe filename for memory-stored files
+    const effectiveExt = path.extname(file.originalname).toLowerCase() || '.bin';
+    const base = path.basename(file.originalname, effectiveExt).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 60);
+    file.filename = `${base}-${Date.now()}-${Math.round(Math.random() * 1e6)}${effectiveExt}`;
     return cb(null, true);
   }
 

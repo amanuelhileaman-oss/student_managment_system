@@ -77,7 +77,7 @@ const getMimeType = (fileName, fallbackType = 'application/octet-stream') => {
  * @param {Object} options - Options including folder, originalName, resourceType
  * @returns {Promise<Object>} Cloudinary upload result
  */
-const uploadBuffer = (buffer, options = {}) => {
+function uploadBuffer(buffer, options = {}, folderParam = null, resourceTypeParam = null) {
   return new Promise((resolve, reject) => {
     ensureConfig();
     if (!isConfigured()) {
@@ -90,11 +90,11 @@ const uploadBuffer = (buffer, options = {}) => {
 
     if (typeof options === 'string') {
       originalName = options;
-      if (arguments.length > 2 && typeof arguments[2] === 'string') {
-        folder = arguments[2];
+      if (folderParam && typeof folderParam === 'string') {
+        folder = folderParam;
       }
-      if (arguments.length > 3 && typeof arguments[3] === 'string') {
-        resourceType = arguments[3];
+      if (resourceTypeParam && typeof resourceTypeParam === 'string') {
+        resourceType = resourceTypeParam;
       }
     } else if (typeof options === 'object' && options !== null) {
       folder = options.folder || folder;
@@ -104,16 +104,16 @@ const uploadBuffer = (buffer, options = {}) => {
 
     const ext = path.extname(originalName).toLowerCase();
     
-    // For PDFs and images, 'image' resource type enables high-res thumbnail and page-1 previews (/pg_1/)
-    // For Office documents, 'raw' is best
+    // For images, use 'image' resource type.
+    // For ALL documents (PDF, Word, PPT, Excel, etc.), use 'raw' resource type.
+    // 'raw' prevents Cloudinary from running image transformations on PDFs, PPTs, DOCs, eliminating 400 errors.
+    const isImage = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg'].includes(ext);
     const effectiveResourceType =
       resourceType !== 'auto'
         ? resourceType
-        : ['.ppt', '.pptx', '.doc', '.docx', '.xls', '.xlsx', '.epub', '.odt', '.ods', '.odp', '.txt', '.rtf', '.zip', '.rar', '.7z', '.csv'].includes(ext)
-        ? 'raw'
-        : ext === '.pdf'
+        : isImage
         ? 'image'
-        : 'auto';
+        : 'raw';
 
     // Sanitize filename_override for Cloudinary: safe ASCII alphanumeric, dots, dashes, underscores
     const rawBase = path.basename(originalName, ext);
@@ -142,7 +142,7 @@ const uploadBuffer = (buffer, options = {}) => {
 
     Readable.from(buffer).pipe(uploadStream);
   });
-};
+}
 
 /**
  * Generate a signed Cloudinary download URL that guarantees HTTP 200 binary delivery across all devices
@@ -256,29 +256,16 @@ const streamFileToResponse = async ({ fileUrl, publicId, fileName, mimeType, isI
 
 const pipeToExpress = async (upstreamRes, res, fileName, mimeType, isInline) => {
   const dispositionType = isInline ? 'inline' : 'attachment';
-  const cleanName = (fileName || 'document').replace(/"/g, '');
+  const cleanName = (fileName || 'document').replace(/"/g, '').replace(/[^\w\s.-]/gi, '_');
   const encodedName = encodeURIComponent(cleanName);
 
   res.setHeader('Content-Type', mimeType || upstreamRes.headers.get('content-type') || 'application/octet-stream');
   res.setHeader('Content-Disposition', `${dispositionType}; filename="${cleanName}"; filename*=UTF-8''${encodedName}`);
 
-  const contentLength = upstreamRes.headers.get('content-length');
-  if (contentLength && contentLength !== '0') {
-    res.setHeader('Content-Length', contentLength);
-  }
-
-  if (upstreamRes.body) {
-    if (typeof upstreamRes.body.pipe === 'function') {
-      upstreamRes.body.pipe(res);
-    } else if (Readable && typeof Readable.fromWeb === 'function') {
-      Readable.fromWeb(upstreamRes.body).pipe(res);
-    } else {
-      const arrayBuffer = await upstreamRes.arrayBuffer();
-      res.end(Buffer.from(arrayBuffer));
-    }
-  } else {
-    res.end();
-  }
+  const arrayBuffer = await upstreamRes.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  res.setHeader('Content-Length', buffer.length);
+  return res.end(buffer);
 };
 
 /**
@@ -317,10 +304,11 @@ const deleteFile = async (fileUrlOrPublicId) => {
 const processUploadedFile = async (file, options = {}) => {
   if (!file) return null;
   const { folder = 'ethio_highhub/general', localDir = 'materials' } = options;
+  const fileBuffer = file.buffer || (file.path && fs.existsSync(file.path) ? fs.readFileSync(file.path) : null);
 
-  if (isConfigured() && file.buffer) {
+  if (isConfigured() && fileBuffer) {
     try {
-      const result = await uploadBuffer(file.buffer, {
+      const result = await uploadBuffer(fileBuffer, {
         folder,
         originalName: file.originalname,
         resourceType: 'auto',
@@ -359,8 +347,8 @@ const processUploadedFile = async (file, options = {}) => {
   const diskFileName = `${baseName}-${uniqueSuffix}${ext}`;
   const filePath = path.join(targetDir, diskFileName);
 
-  if (file.buffer) {
-    fs.writeFileSync(filePath, file.buffer);
+  if (fileBuffer) {
+    fs.writeFileSync(filePath, fileBuffer);
   }
 
   return {

@@ -177,32 +177,49 @@ export const triggerFileDownload = async (endpointOrUrl, fileName = 'document', 
         if (onProgress) onProgress(100);
       } else {
         // Direct public CDN download (e.g. Cloudinary)
-        const res = await fetch(resolved);
-        if (!res.ok) {
-          throw new Error(`File download failed with status ${res.status}.`);
-        }
-
-        const contentLength = res.headers.get('content-length');
-        if (contentLength && res.body && onProgress) {
-          const total = parseInt(contentLength, 10);
-          let loaded = 0;
-          const reader = res.body.getReader();
-          const chunks = [];
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            chunks.push(value);
-            loaded += value.length;
-            const percent = Math.min(99, Math.round((loaded / total) * 100));
-            onProgress(percent);
-          }
-          blob = new Blob(chunks, {
-            type: res.headers.get('content-type') || 'application/octet-stream',
+        if (resolved.includes('res.cloudinary.com')) {
+          const proxyEndpoint = `/common/download?url=${encodeURIComponent(resolved)}&name=${encodeURIComponent(fileName)}`;
+          const res = await api.get(proxyEndpoint, {
+            responseType: 'blob',
+            onDownloadProgress: (progressEvent) => {
+              if (progressEvent.total && onProgress) {
+                const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+                onProgress(Math.min(99, percent));
+              }
+            },
           });
-          onProgress(100);
-        } else {
-          blob = await res.blob();
+          blob = new Blob([res.data], {
+            type: res.headers['content-type'] || 'application/octet-stream',
+          });
           if (onProgress) onProgress(100);
+        } else {
+          const res = await fetch(resolved);
+          if (!res.ok) {
+            throw new Error(`File download failed with status ${res.status}.`);
+          }
+
+          const contentLength = res.headers.get('content-length');
+          if (contentLength && res.body && onProgress) {
+            const total = parseInt(contentLength, 10);
+            let loaded = 0;
+            const reader = res.body.getReader();
+            const chunks = [];
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              chunks.push(value);
+              loaded += value.length;
+              const percent = Math.min(99, Math.round((loaded / total) * 100));
+              onProgress(percent);
+            }
+            blob = new Blob(chunks, {
+              type: res.headers.get('content-type') || 'application/octet-stream',
+            });
+            onProgress(100);
+          } else {
+            blob = await res.blob();
+            if (onProgress) onProgress(100);
+          }
         }
       }
     }

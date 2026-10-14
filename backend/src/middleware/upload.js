@@ -1,28 +1,8 @@
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
 
-// Ensure upload directory exists
-const uploadDir = path.join(__dirname, '../../uploads/assignments');
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-// Storage engine configuration
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    const baseName = path
-      .basename(file.originalname, ext)
-      .replace(/[^a-zA-Z0-9_-]/g, '_')
-      .slice(0, 50);
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e6);
-    cb(null, `${baseName}-${uniqueSuffix}${ext}`);
-  },
-});
+// Memory storage keeps file buffers in RAM, preventing loss on ephemeral cloud instances (e.g. Render)
+const storage = multer.memoryStorage();
 
 // File filter accepting all standard educational document and media formats across devices
 const allowedExtensions = /\.(pdf|doc|docx|ppt|pptx|xls|xlsx|txt|rtf|odt|ods|odp|epub|mobi|zip|rar|7z|csv|png|jpg|jpeg|webp)$/i;
@@ -53,7 +33,6 @@ const fileFilter = (req, file, cb) => {
   const isMimeAllowed = allowedMimePrefixes.some((prefix) => mime.startsWith(prefix));
 
   if (isExtAllowed || isMimeAllowed) {
-    // If mobile device sent a file without an extension, synthesize a safe default extension based on MIME
     if (!ext) {
       if (mime.includes('pdf')) file.originalname = `${originalName}.pdf`;
       else if (mime.includes('word') || mime.includes('officedocument.wordprocessingml')) file.originalname = `${originalName}.docx`;
@@ -62,12 +41,16 @@ const fileFilter = (req, file, cb) => {
       else if (mime.startsWith('image/')) file.originalname = `${originalName}.jpg`;
       else file.originalname = `${originalName}.pdf`;
     }
+    // Pre-calculate safe filename for memory-stored files
+    const effectiveExt = path.extname(file.originalname).toLowerCase() || '.bin';
+    const base = path.basename(file.originalname, effectiveExt).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50);
+    file.filename = `${base}-${Date.now()}-${Math.round(Math.random() * 1e6)}${effectiveExt}`;
     return cb(null, true);
   }
 
   cb(
     new Error(
-      `File format "${ext || mime}" is not supported. Please upload Word (.doc, .docx), PDF (.pdf), PowerPoint, Excel, or standard document files.`
+      `File format "${ext || mime}" is not supported. Please upload Word (.doc, .docx), PDF (.pdf), PowerPoint (.ppt, .pptx), Excel, or standard document files.`
     )
   );
 };
