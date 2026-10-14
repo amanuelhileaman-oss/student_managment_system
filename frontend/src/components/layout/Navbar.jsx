@@ -95,22 +95,7 @@ const Navbar = ({ onMobileMenuToggle }) => {
   const [notifFilter, setNotifFilter] = useState('all'); // 'all' | 'unread'
 
   const notifDropdownRef = useRef(null);
-  const [isGlobalRefreshing, setIsGlobalRefreshing] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
-
-  const handleGlobalRefresh = async () => {
-    setIsGlobalRefreshing(true);
-    try {
-      window.dispatchEvent(new CustomEvent('stude:refresh'));
-      await fetchNotifications(true);
-    } catch (e) {
-      console.warn('Global refresh error:', e);
-    } finally {
-      setTimeout(() => {
-        setIsGlobalRefreshing(false);
-      }, 700);
-    }
-  };
 
   const fetchNotifications = async (showLoading = false) => {
     if (showLoading) setLoadingNotifs(true);
@@ -297,16 +282,7 @@ const Navbar = ({ onMobileMenuToggle }) => {
         {/* Right side controls */}
         <div className="flex items-center gap-2 sm:gap-3">
 
-          {/* Quick Messages Link */}
-          {user && (
-            <Link
-              to={currentRole.messagesPath}
-              className="p-2 rounded-lg text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors relative"
-              title="Direct Messages"
-            >
-              <MessageSquare className="w-5 h-5" />
-            </Link>
-          )}
+
 
           {/* Interactive Notifications Center */}
           {user && (
@@ -528,19 +504,7 @@ const Navbar = ({ onMobileMenuToggle }) => {
             </div>
           )}
 
-          {/* Universal System Refresh Button */}
-          <button
-            type="button"
-            onClick={handleGlobalRefresh}
-            disabled={isGlobalRefreshing}
-            className="p-2 rounded-xl text-slate-500 hover:text-primary-600 dark:text-slate-400 dark:hover:text-primary-400 hover:bg-slate-100 dark:hover:bg-slate-800/80 transition-all active:scale-95"
-            title="Refresh application data & views"
-            id="navbar-refresh-btn"
-          >
-            <RefreshCw
-              className={`w-4 h-4 ${isGlobalRefreshing ? 'animate-spin text-primary-600 dark:text-primary-400' : ''}`}
-            />
-          </button>
+
 
           <ThemeToggle />
 

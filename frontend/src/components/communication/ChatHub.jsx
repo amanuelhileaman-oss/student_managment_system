@@ -380,26 +380,15 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
                 Conversations ({conversations.length})
               </h2>
             </div>
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => fetchConversations(false)}
-                disabled={isRefreshingConv}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors"
-                title="Refresh conversations list"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingConv ? 'animate-spin text-primary-600' : ''}`} />
-              </button>
-              <button
-                type="button"
-                onClick={handleOpenContacts}
-                className="px-2.5 py-1.5 rounded-xl bg-primary-600 hover:bg-primary-700 active:scale-95 text-white font-semibold text-xs flex items-center gap-1 shadow-sm transition-all"
-                title="Start a new conversation"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>New Chat</span>
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={handleOpenContacts}
+              className="px-2.5 py-1.5 rounded-xl bg-primary-600 hover:bg-primary-700 active:scale-95 text-white font-semibold text-xs flex items-center gap-1 shadow-sm transition-all"
+              title="Start a new conversation"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>New Chat</span>
+            </button>
           </div>
 
           {/* Search Box */}
@@ -468,14 +457,6 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
             ) : (
               <div className="p-8 text-center text-slate-400 dark:text-slate-500 text-xs">
                 <p>No active conversations.</p>
-                <button
-                  type="button"
-                  onClick={handleOpenContacts}
-                  className="mt-3 inline-flex items-center gap-1 font-semibold text-primary-600 dark:text-primary-400 hover:underline"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Start a new chat</span>
-                </button>
               </div>
             )}
           </div>
@@ -530,17 +511,7 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
                   <Search className="w-3.5 h-3.5" />
                 </button>
 
-                {/* Refresh active chat messages */}
-                <button
-                  type="button"
-                  onClick={() => fetchMessages(activeConv.id, false)}
-                  disabled={isRefreshingMsg}
-                  className="px-2 py-1.5 rounded-lg text-xs font-semibold text-slate-500 hover:text-primary-600 dark:text-slate-400 dark:hover:text-primary-400 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1.5 transition-colors"
-                  title="Refresh chat messages"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingMsg ? 'animate-spin text-primary-600' : ''}`} />
-                  <span className="hidden sm:inline">Refresh</span>
-                </button>
+
               </div>
             </div>
 
@@ -826,16 +797,8 @@ const ChatHub = ({ portalTitle = 'Communication & Direct Messages' }) => {
               No Conversation Selected
             </h3>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-sm">
-              Select an ongoing conversation from the list or start a new message with students, faculty, or administration.
+              Select an ongoing conversation from the list or click New Chat to start a message with students, faculty, or administration.
             </p>
-            <button
-              type="button"
-              onClick={handleOpenContacts}
-              className="mt-4 px-4 py-2 rounded-xl bg-primary-600 hover:bg-primary-700 text-white font-semibold text-xs shadow-sm transition-all flex items-center gap-1.5"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Start New Chat</span>
-            </button>
           </div>
         )}
       </div>

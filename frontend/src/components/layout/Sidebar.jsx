@@ -17,11 +17,9 @@ import {
   FileText,
   FileCheck,
   Award,
-  User,
   UserCheck,
   X,
 } from 'lucide-react';
-import ThemeToggle from '../common/ThemeToggle';
 
 const Sidebar = ({ isOpen, onClose }) => {
   const { user } = useAuth();
@@ -39,7 +37,6 @@ const Sidebar = ({ isOpen, onClose }) => {
     { name: 'Direct Messages', path: '/admin/messages', icon: MessageSquare },
     { name: 'Audit Logs', path: '/admin/audit-logs', icon: ShieldAlert },
     { name: 'System Settings', path: '/admin/settings', icon: Settings },
-    { name: 'My Profile', path: '/admin/profile', icon: User },
   ];
 
   const teacherNav = [
@@ -51,7 +48,6 @@ const Sidebar = ({ isOpen, onClose }) => {
     { name: 'Teaching Schedule', path: '/teacher/schedule', icon: Calendar },
     { name: 'Assigned Students', path: '/teacher/students', icon: Users },
     { name: 'Messages', path: '/teacher/messages', icon: MessageSquare },
-    { name: 'My Profile', path: '/teacher/profile', icon: User },
   ];
 
   const studentNav = [
@@ -62,12 +58,10 @@ const Sidebar = ({ isOpen, onClose }) => {
     { name: 'Assignments & Projects', path: '/student/assignments', icon: FileText },
     { name: 'Class Timetable', path: '/student/schedule', icon: Calendar },
     { name: 'Messages', path: '/student/messages', icon: MessageSquare },
-    { name: 'My Profile', path: '/student/profile', icon: User },
   ];
 
   const superadminNav = [
     { name: 'Platform Overview', path: '/superadmin/dashboard', icon: LayoutDashboard },
-    { name: 'My Profile', path: '/profile', icon: User },
   ];
 
   let currentNav = [];
@@ -133,13 +127,9 @@ const Sidebar = ({ isOpen, onClose }) => {
         </div>
 
         {/* Sidebar Footer info */}
-        <div className="p-3.5 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-400 space-y-2">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <ThemeToggle className="p-1.5" showLabel={true} />
-            </div>
-            <span className="text-[10px] font-mono bg-slate-100 dark:bg-slate-800 text-slate-500 px-1.5 py-0.5 rounded">v1.0.0</span>
-          </div>
+        <div className="p-3.5 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-400 flex items-center justify-between">
+          <span className="text-[11px] font-medium text-slate-400 dark:text-slate-500">EthioHighHub</span>
+          <span className="text-[10px] font-mono bg-slate-100 dark:bg-slate-800 text-slate-500 px-1.5 py-0.5 rounded">v1.0.0</span>
         </div>
       </aside>
     </>
