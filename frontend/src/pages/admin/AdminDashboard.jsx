@@ -5,6 +5,7 @@ import StatCard from '../../components/common/StatCard';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import Alert from '../../components/common/Alert';
 import Badge from '../../components/common/Badge';
+import { useAuth } from '../../context/AuthContext';
 import {
   Users,
   GraduationCap,
@@ -22,6 +23,9 @@ import {
   Sparkles,
   RefreshCw,
   Trash2,
+  Lock,
+  CreditCard,
+  ShieldAlert,
 } from 'lucide-react';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
@@ -53,6 +57,7 @@ const STANDARD_PERIODS = [
 ];
 
 const AdminDashboard = () => {
+  const { user } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -166,6 +171,38 @@ const AdminDashboard = () => {
           <span>{isRefreshing ? 'Refreshing...' : 'Refresh Data'}</span>
         </button>
       </div>
+
+      {/* School License Activation Pending Banner */}
+      {(user?.subscriptionStatus === 'PENDING_PAYMENT' || user?.isLocked) && (
+        <div className="p-5 rounded-3xl bg-gradient-to-r from-amber-500/20 via-rose-500/15 to-amber-500/10 border-2 border-amber-500/40 dark:border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-lg shadow-amber-500/5 animate-in fade-in">
+          <div className="flex items-start gap-4">
+            <div className="p-3 rounded-2xl bg-gradient-to-tr from-amber-500 to-rose-500 text-white shrink-0 mt-0.5 shadow-md">
+              <Lock className="w-6 h-6" />
+            </div>
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-rose-500 text-white animate-pulse">
+                  Activation Pending
+                </span>
+                <h3 className="font-extrabold text-base text-slate-900 dark:text-white">
+                  Complete Initial School License Payment
+                </h3>
+              </div>
+              <p className="text-xs text-slate-600 dark:text-slate-300 max-w-2xl leading-relaxed">
+                Your high school was provisioned by Platform Super Administration. Student admissions, teacher management, class timetables, and grading modules are locked until your school completes its initial annual license payment.
+              </p>
+            </div>
+          </div>
+          <Link
+            to="/admin/billing"
+            className="px-5 py-3 rounded-2xl bg-gradient-to-r from-amber-600 to-rose-600 hover:from-amber-500 hover:to-rose-500 text-white font-bold text-xs transition-all shrink-0 flex items-center justify-center gap-2 shadow-md shadow-amber-600/20 active:scale-95"
+          >
+            <CreditCard className="w-4 h-4" />
+            <span>Select Plan & Pay</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </Link>
+        </div>
+      )}
 
       {/* Grade 8 Admissions Pending Action Banner */}
       {data.pendingDocuments > 0 && (

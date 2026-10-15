@@ -5,6 +5,7 @@ import { ThemeProvider } from './context/ThemeContext';
 import DashboardLayout from './components/layout/DashboardLayout';
 import LoadingSpinner from './components/common/LoadingSpinner';
 import ProfilePage from './pages/common/ProfilePage';
+import SubscriptionLockedCard from './components/common/SubscriptionLockedCard';
 
 // Public & Auth Pages
 import LandingPage from './pages/LandingPage';
@@ -14,6 +15,8 @@ import RegisterTeacherPage from './pages/auth/RegisterTeacherPage';
 
 // Super Admin Portal Pages
 import SuperAdminDashboard from './pages/superadmin/SuperAdminDashboard';
+import SuperAdminMorePage from './pages/superadmin/SuperAdminMorePage';
+import SuperAdminActionsPage from './pages/superadmin/SuperAdminActionsPage';
 
 // Admin Portal Pages
 import AdminDashboard from './pages/admin/AdminDashboard';
@@ -27,6 +30,8 @@ import AnnouncementsPage from './pages/admin/AnnouncementsPage';
 import MessagesPage from './pages/admin/MessagesPage';
 import AuditLogsPage from './pages/admin/AuditLogsPage';
 import SettingsPage from './pages/admin/SettingsPage';
+import SchoolBillingPage from './pages/admin/SchoolBillingPage';
+import PaymentSuccessPage from './pages/admin/PaymentSuccessPage';
 
 // Teacher Portal Pages
 import TeacherDashboard from './pages/teacher/TeacherDashboard';
@@ -73,6 +78,20 @@ const RoleRoute = ({ allowedRoles, children }) => {
   return children;
 };
 
+/**
+ * Route guard restricting access to operational modules when school subscription is PENDING_PAYMENT
+ */
+const SubscriptionGate = ({ children, moduleName = 'This feature' }) => {
+  const { user } = useAuth();
+  const isPendingPayment =
+    user?.subscriptionStatus === 'PENDING_PAYMENT' || user?.isLocked === true;
+
+  if (isPendingPayment) {
+    return <SubscriptionLockedCard moduleName={moduleName} />;
+  }
+  return children;
+};
+
 function AppRoutes() {
   return (
     <Routes>
@@ -90,6 +109,9 @@ function AppRoutes() {
             <DashboardLayout>
               <Routes>
                 <Route path="dashboard" element={<SuperAdminDashboard />} />
+                <Route path="more" element={<SuperAdminMorePage />} />
+                <Route path="billing" element={<SuperAdminMorePage />} />
+                <Route path="actions" element={<SuperAdminActionsPage />} />
                 <Route path="profile" element={<ProfilePage />} />
                 <Route path="*" element={<Navigate to="/superadmin/dashboard" replace />} />
               </Routes>
@@ -98,7 +120,7 @@ function AppRoutes() {
         }
       />
 
-      {/* Admin Portal Routes */}
+// Admin Portal Routes
       <Route
         path="/admin/*"
         element={
@@ -106,16 +128,88 @@ function AppRoutes() {
             <DashboardLayout>
               <Routes>
                 <Route path="dashboard" element={<AdminDashboard />} />
-                <Route path="sections" element={<SectionsManagement />} />
-                <Route path="users" element={<UsersManagement />} />
-                <Route path="academic" element={<AcademicManagement />} />
-                <Route path="teachers" element={<TeacherAssignments />} />
-                <Route path="schedules" element={<SchedulesManagement />} />
-                <Route path="reports" element={<ReportsPage />} />
-                <Route path="announcements" element={<AnnouncementsPage />} />
-                <Route path="messages" element={<MessagesPage />} />
-                <Route path="audit-logs" element={<AuditLogsPage />} />
-                <Route path="settings" element={<SettingsPage />} />
+                <Route
+                  path="sections"
+                  element={
+                    <SubscriptionGate moduleName="Sections & Capacity Management">
+                      <SectionsManagement />
+                    </SubscriptionGate>
+                  }
+                />
+                <Route
+                  path="users"
+                  element={
+                    <SubscriptionGate moduleName="User & Student Directory">
+                      <UsersManagement />
+                    </SubscriptionGate>
+                  }
+                />
+                <Route
+                  path="academic"
+                  element={
+                    <SubscriptionGate moduleName="Academic Programs & Stream Criteria">
+                      <AcademicManagement />
+                    </SubscriptionGate>
+                  }
+                />
+                <Route
+                  path="teachers"
+                  element={
+                    <SubscriptionGate moduleName="Teacher Subject Assignments">
+                      <TeacherAssignments />
+                    </SubscriptionGate>
+                  }
+                />
+                <Route
+                  path="schedules"
+                  element={
+                    <SubscriptionGate moduleName="Master Class Schedules">
+                      <SchedulesManagement />
+                    </SubscriptionGate>
+                  }
+                />
+                <Route
+                  path="reports"
+                  element={
+                    <SubscriptionGate moduleName="Academic Reports & CSV Exports">
+                      <ReportsPage />
+                    </SubscriptionGate>
+                  }
+                />
+                <Route
+                  path="announcements"
+                  element={
+                    <SubscriptionGate moduleName="School Announcements">
+                      <AnnouncementsPage />
+                    </SubscriptionGate>
+                  }
+                />
+                <Route
+                  path="messages"
+                  element={
+                    <SubscriptionGate moduleName="Direct Messages">
+                      <MessagesPage />
+                    </SubscriptionGate>
+                  }
+                />
+                <Route
+                  path="audit-logs"
+                  element={
+                    <SubscriptionGate moduleName="Audit Logs & Compliance">
+                      <AuditLogsPage />
+                    </SubscriptionGate>
+                  }
+                />
+                <Route
+                  path="settings"
+                  element={
+                    <SubscriptionGate moduleName="School System Settings">
+                      <SettingsPage />
+                    </SubscriptionGate>
+                  }
+                />
+                <Route path="billing" element={<SchoolBillingPage />} />
+                <Route path="billing/success" element={<PaymentSuccessPage />} />
                 <Route path="profile" element={<ProfilePage />} />
                 <Route path="*" element={<Navigate to="/admin/dashboard" replace />} />
               </Routes>

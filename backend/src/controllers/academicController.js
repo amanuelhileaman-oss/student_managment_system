@@ -30,7 +30,7 @@ const getStreams = async (req, res, next) => {
 const getSubjects = async (req, res, next) => {
   try {
     const { gradeLevel, streamId } = req.query;
-    const schoolId = req.user?.school_id;
+    const schoolId = req.user?.school_id || (req.query.schoolId ? parseInt(req.query.schoolId, 10) : null);
     let sql = `
       SELECT s.*, st.name as stream_name, st.code as stream_code,
              COUNT(DISTINCT ta.teacher_id) as teacher_count,
@@ -44,8 +44,11 @@ const getSubjects = async (req, res, next) => {
 
     if (schoolId) {
       params.push(schoolId);
-      sql += ` AND (s.school_id = $${params.length} OR s.school_id IS NULL)`;
+      sql += ` AND s.school_id = $${params.length}`;
+    } else {
+      sql += ` AND s.school_id IS NULL`;
     }
+
     if (gradeLevel) {
       params.push(parseInt(gradeLevel, 10));
       sql += ` AND s.grade_level = $${params.length}`;
@@ -76,7 +79,7 @@ const getSubjects = async (req, res, next) => {
 const getSections = async (req, res, next) => {
   try {
     const { gradeLevel, streamId } = req.query;
-    const schoolId = req.user?.school_id;
+    const schoolId = req.user?.school_id || (req.query.schoolId ? parseInt(req.query.schoolId, 10) : null);
     let sql = `
       SELECT sec.id, sec.grade_level, sec.stream_id, sec.section_name, sec.capacity, sec.academic_year_id, sec.is_active,
              st.name as stream_name, st.code as stream_code,
@@ -92,8 +95,11 @@ const getSections = async (req, res, next) => {
 
     if (schoolId) {
       params.push(schoolId);
-      sql += ` AND (sec.school_id = $${params.length} OR sec.school_id IS NULL)`;
+      sql += ` AND sec.school_id = $${params.length}`;
+    } else {
+      sql += ` AND sec.school_id IS NULL`;
     }
+
     if (gradeLevel) {
       params.push(parseInt(gradeLevel, 10));
       sql += ` AND sec.grade_level = $${params.length}`;
@@ -124,12 +130,14 @@ const getSections = async (req, res, next) => {
  */
 const getAcademicYears = async (req, res, next) => {
   try {
-    const schoolId = req.user?.school_id;
+    const schoolId = req.user?.school_id || (req.query.schoolId ? parseInt(req.query.schoolId, 10) : null);
     let sql = 'SELECT * FROM academic_years';
     const params = [];
     if (schoolId) {
       params.push(schoolId);
-      sql += ' WHERE school_id = $1 OR school_id IS NULL';
+      sql += ' WHERE school_id = $1';
+    } else {
+      sql += ' WHERE school_id IS NULL';
     }
     sql += ' ORDER BY start_date DESC';
     const result = await query(sql, params);

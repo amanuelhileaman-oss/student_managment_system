@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const academicController = require('../controllers/academicController');
+const { optionalAuthenticateToken } = require('../middleware/auth');
+
+router.use(optionalAuthenticateToken);
 
 router.get('/grades', academicController.getGrades);
 router.get('/streams', academicController.getStreams);

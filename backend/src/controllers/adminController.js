@@ -59,32 +59,58 @@ const getAnalytics = async (req, res, next) => {
       ORDER BY st.id ASC
     `);
 
-    // 5. Recent audit actions
-    const recentAuditsRes = await query(`
+    // 5. Recent audit actions scoped to this school
+    let auditSql = `
       SELECT al.*, u.email, u.role, u.first_name, u.last_name
       FROM audit_logs al
       LEFT JOIN users u ON al.user_id = u.id
-      ORDER BY al.created_at DESC
-      LIMIT 10
-    `);
+      WHERE 1=1
+    `;
+    const auditParams = [];
+    if (schoolId) {
+      auditParams.push(schoolId);
+      auditSql += ` AND al.school_id = $${auditParams.length}`;
+    }
+    auditSql += ` ORDER BY al.created_at DESC LIMIT 10`;
+    const recentAuditsRes = await query(auditSql, auditParams);
 
-    // 6. Pending Grade 8 admission documents count
-    const pendingDocsRes = await query(`
-      SELECT COUNT(id) as count
-      FROM students
-      WHERE document_status = 'PENDING_ADMIN_VERIFICATION'
-    `);
+    // 6. Pending Grade 8 admission documents count scoped to this school
+    let docSql = `SELECT COUNT(id) as count FROM students WHERE document_status = 'PENDING_ADMIN_VERIFICATION'`;
+    const docParams = [];
+    if (schoolId) {
+      docParams.push(schoolId);
+      docSql += ` AND school_id = $${docParams.length}`;
+    }
+    const pendingDocsRes = await query(docSql, docParams);
     const pendingDocuments = parseInt(pendingDocsRes.rows[0].count || 0, 10);
 
-    // 7. Master Schedules count & coverage
-    const schCountRes = await query('SELECT COUNT(*) as count FROM schedules');
+    // 7. Master Schedules count & coverage scoped to this school
+    let schSql = `
+      SELECT COUNT(sch.id) as count 
+      FROM schedules sch 
+      JOIN teacher_assignments ta ON sch.teacher_assignment_id = ta.id
+      JOIN sections sec ON ta.section_id = sec.id
+    `;
+    const schParams = [];
+    if (schoolId) {
+      schParams.push(schoolId);
+      schSql += ' WHERE sec.school_id = $1';
+    }
+    const schCountRes = await query(schSql, schParams);
     const totalSchedules = parseInt(schCountRes.rows[0].count || 0, 10);
 
-    const secSchRes = await query(`
+    let secSchSql = `
       SELECT COUNT(DISTINCT ta.section_id) as count
       FROM schedules sch
       JOIN teacher_assignments ta ON sch.teacher_assignment_id = ta.id
-    `);
+      JOIN sections sec ON ta.section_id = sec.id
+    `;
+    const secSchParams = [];
+    if (schoolId) {
+      secSchParams.push(schoolId);
+      secSchSql += ' WHERE sec.school_id = $1';
+    }
+    const secSchRes = await query(secSchSql, secSchParams);
     const sectionsWithSchedules = parseInt(secSchRes.rows[0].count || 0, 10);
 
     res.json({
@@ -671,8 +697,13 @@ const createSubject = async (req, res, next) => {
       }
     }
 
-    // Check code uniqueness
-    const codeConflict = await query('SELECT id, name FROM subjects WHERE UPPER(code) = $1', [formattedCode]);
+    const schoolId = req.user?.school_id || null;
+
+    // Check code uniqueness within this school
+    const codeConflict = await query(
+      'SELECT id, name FROM subjects WHERE UPPER(code) = $1 AND (school_id = $2 OR (school_id IS NULL AND $2 IS NULL))',
+      [formattedCode, schoolId]
+    );
     if (codeConflict.rows.length > 0) {
       return res.status(400).json({
         success: false,
@@ -680,10 +711,10 @@ const createSubject = async (req, res, next) => {
       });
     }
 
-    // Check duplicate subject name in same grade and stream
+    // Check duplicate subject name in same grade and stream within this school
     const nameConflict = await query(
-      'SELECT id, code FROM subjects WHERE LOWER(TRIM(name)) = LOWER($1) AND grade_level = $2 AND stream_id = $3',
-      [formattedName, gLevel, assignedStreamId]
+      'SELECT id, code FROM subjects WHERE LOWER(TRIM(name)) = LOWER($1) AND grade_level = $2 AND stream_id = $3 AND (school_id = $4 OR (school_id IS NULL AND $4 IS NULL))',
+      [formattedName, gLevel, assignedStreamId, schoolId]
     );
     if (nameConflict.rows.length > 0) {
       return res.status(400).json({
@@ -693,10 +724,10 @@ const createSubject = async (req, res, next) => {
     }
 
     const insRes = await query(
-      `INSERT INTO subjects (code, name, grade_level, stream_id, credit_hours)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO subjects (school_id, code, name, grade_level, stream_id, credit_hours)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
-      [formattedCode, formattedName, gLevel, assignedStreamId, credits]
+      [schoolId, formattedCode, formattedName, gLevel, assignedStreamId, credits]
     );
 
     const newSubject = insRes.rows[0];
@@ -772,8 +803,12 @@ const updateSubject = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Stream is required for senior grades.' });
     }
 
-    // Check code uniqueness across other subjects
-    const codeConflict = await query('SELECT id, name FROM subjects WHERE UPPER(code) = $1 AND id != $2', [newCode, id]);
+    // Check code uniqueness across other subjects within this school
+    const schoolId = req.user?.school_id || null;
+    const codeConflict = await query(
+      'SELECT id, name FROM subjects WHERE UPPER(code) = $1 AND id != $2 AND (school_id = $3 OR (school_id IS NULL AND $3 IS NULL))',
+      [newCode, id, schoolId]
+    );
     if (codeConflict.rows.length > 0) {
       return res.status(400).json({
         success: false,
@@ -824,6 +859,10 @@ const deleteSubject = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Subject not found.' });
     }
     const subject = subCheck.rows[0];
+
+    if (req.user?.role !== 'superadmin' && subject.school_id && req.user?.school_id && subject.school_id !== req.user.school_id) {
+      return res.status(403).json({ success: false, message: 'Unauthorized to delete another school\'s subject.' });
+    }
 
     // Check teacher assignments
     const taCheck = await query('SELECT COUNT(*) FROM teacher_assignments WHERE subject_id = $1', [id]);

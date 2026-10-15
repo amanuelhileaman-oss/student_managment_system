@@ -5,6 +5,15 @@ const { query } = require('../config/db');
  */
 const getCapacityReport = async (req, res, next) => {
   try {
+    const schoolId = req.user?.school_id || (req.query.schoolId ? parseInt(req.query.schoolId, 10) : null);
+    const params = [];
+    let schoolFilter = 'AND sec.school_id IS NULL';
+
+    if (schoolId) {
+      params.push(schoolId);
+      schoolFilter = `AND sec.school_id = $${params.length}`;
+    }
+
     const result = await query(`
       SELECT sec.id, sec.grade_level, sec.section_name, sec.capacity,
              st.name as stream_name, st.code as stream_code,
@@ -17,10 +26,10 @@ const getCapacityReport = async (req, res, next) => {
       JOIN streams st ON sec.stream_id = st.id
       JOIN academic_years ay ON sec.academic_year_id = ay.id
       LEFT JOIN enrollments e ON sec.id = e.section_id AND e.status = 'ENROLLED'
-      WHERE sec.is_active = TRUE
+      WHERE sec.is_active = TRUE ${schoolFilter}
       GROUP BY sec.id, st.name, st.code, ay.year_name
       ORDER BY sec.grade_level ASC, sec.section_name ASC
-    `);
+    `, params);
 
     res.json({ success: true, data: result.rows });
   } catch (error) {
@@ -33,6 +42,15 @@ const getCapacityReport = async (req, res, next) => {
  */
 const getPromotionReport = async (req, res, next) => {
   try {
+    const schoolId = req.user?.school_id || (req.query.schoolId ? parseInt(req.query.schoolId, 10) : null);
+    const params = [];
+    let schoolFilter = 'WHERE u.school_id IS NULL';
+
+    if (schoolId) {
+      params.push(schoolId);
+      schoolFilter = `WHERE u.school_id = $${params.length}`;
+    }
+
     const result = await query(`
       SELECT s.id, s.student_id, s.current_grade_level,
              u.first_name, u.last_name, u.email,
@@ -48,9 +66,10 @@ const getPromotionReport = async (req, res, next) => {
       LEFT JOIN sections sec ON s.current_section_id = sec.id
       LEFT JOIN streams st ON s.current_stream_id = st.id
       LEFT JOIN grade_records gr ON s.id = gr.student_id AND gr.section_id = s.current_section_id
+      ${schoolFilter}
       GROUP BY s.id, s.student_id, s.current_grade_level, u.first_name, u.last_name, u.email, sec.section_name, st.name
       ORDER BY s.current_grade_level ASC, u.last_name ASC
-    `);
+    `, params);
 
     res.json({ success: true, data: result.rows });
   } catch (error) {
@@ -63,6 +82,15 @@ const getPromotionReport = async (req, res, next) => {
  */
 const exportCapacityCSV = async (req, res, next) => {
   try {
+    const schoolId = req.user?.school_id || (req.query.schoolId ? parseInt(req.query.schoolId, 10) : null);
+    const params = [];
+    let schoolFilter = 'AND sec.school_id IS NULL';
+
+    if (schoolId) {
+      params.push(schoolId);
+      schoolFilter = `AND sec.school_id = $${params.length}`;
+    }
+
     const result = await query(`
       SELECT sec.grade_level, sec.section_name, st.name as stream_name,
              sec.capacity, COUNT(e.id) as enrolled_count,
@@ -71,10 +99,10 @@ const exportCapacityCSV = async (req, res, next) => {
       FROM sections sec
       JOIN streams st ON sec.stream_id = st.id
       LEFT JOIN enrollments e ON sec.id = e.section_id AND e.status = 'ENROLLED'
-      WHERE sec.is_active = TRUE
+      WHERE sec.is_active = TRUE ${schoolFilter}
       GROUP BY sec.id, st.name
       ORDER BY sec.grade_level ASC, sec.section_name ASC
-    `);
+    `, params);
 
     let csv = 'Grade,Section,Stream,Capacity,Enrolled,Remaining Seats,Utilization (%)\n';
     result.rows.forEach((r) => {
@@ -94,6 +122,15 @@ const exportCapacityCSV = async (req, res, next) => {
  */
 const exportPromotionCSV = async (req, res, next) => {
   try {
+    const schoolId = req.user?.school_id || (req.query.schoolId ? parseInt(req.query.schoolId, 10) : null);
+    const params = [];
+    let schoolFilter = 'WHERE u.school_id IS NULL';
+
+    if (schoolId) {
+      params.push(schoolId);
+      schoolFilter = `WHERE u.school_id = $${params.length}`;
+    }
+
     const result = await query(`
       SELECT s.student_id, u.first_name, u.last_name, s.current_grade_level,
              sec.section_name, st.name as stream_name,
@@ -104,9 +141,10 @@ const exportPromotionCSV = async (req, res, next) => {
       LEFT JOIN sections sec ON s.current_section_id = sec.id
       LEFT JOIN streams st ON s.current_stream_id = st.id
       LEFT JOIN grade_records gr ON s.id = gr.student_id AND gr.section_id = s.current_section_id
+      ${schoolFilter}
       GROUP BY s.id, s.student_id, u.first_name, u.last_name, s.current_grade_level, sec.section_name, st.name
       ORDER BY s.current_grade_level ASC, s.student_id ASC
-    `);
+    `, params);
 
     let csv = 'Student ID,First Name,Last Name,Grade,Section,Stream,Average Score (%),Promotion Status\n';
     result.rows.forEach((r) => {

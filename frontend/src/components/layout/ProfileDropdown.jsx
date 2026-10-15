@@ -16,6 +16,8 @@ import {
   Sparkles,
   Info,
   Lock,
+  Mail,
+  Key,
 } from 'lucide-react';
 
 const PRESET_AVATARS = [
@@ -404,6 +406,19 @@ const ProfileDropdown = ({ isOpen, onClose }) => {
           </div>
         )}
       </form>
+
+      {/* Quick Security & Credentials Access */}
+      <div className="px-4 py-2 bg-indigo-50/50 dark:bg-indigo-950/20 border-t border-indigo-100 dark:border-indigo-900/30 flex items-center justify-between">
+        <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">Account Credentials</span>
+        <Link
+          to="/profile"
+          onClick={onClose}
+          className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 flex items-center gap-1 hover:underline"
+        >
+          <Key className="w-3 h-3" />
+          <span>Change Email & Password</span>
+        </Link>
+      </div>
 
       {/* Footer Links */}
       <div className="p-3 bg-slate-50 dark:bg-slate-950/40 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-xs">

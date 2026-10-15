@@ -1,5 +1,5 @@
-import React from 'react';
-import { NavLink } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import {
   LayoutDashboard,
@@ -18,11 +18,47 @@ import {
   FileCheck,
   Award,
   UserCheck,
+  CreditCard,
+  Sliders,
+  Zap,
+  Landmark,
+  Trash2,
+  History,
+  ChevronDown,
   X,
+  Lock,
 } from 'lucide-react';
 
 const Sidebar = ({ isOpen, onClose }) => {
   const { user } = useAuth();
+  const location = useLocation();
+
+  const isMoreRoute =
+    location.pathname.startsWith('/superadmin/more') ||
+    location.pathname.startsWith('/superadmin/billing');
+  const isActionsRoute = location.pathname.startsWith('/superadmin/actions');
+
+  const [moreExpanded, setMoreExpanded] = useState(isMoreRoute);
+  const [actionsExpanded, setActionsExpanded] = useState(isActionsRoute);
+
+  // Automatically expand when on route, collapse when navigating away
+  useEffect(() => {
+    if (isMoreRoute) {
+      setMoreExpanded(true);
+    } else {
+      setMoreExpanded(false);
+    }
+
+    if (isActionsRoute) {
+      setActionsExpanded(true);
+    } else {
+      setActionsExpanded(false);
+    }
+  }, [location.pathname]);
+
+  const isPendingPayment =
+    user?.role === 'admin' &&
+    (user?.subscriptionStatus === 'PENDING_PAYMENT' || user?.isLocked === true);
 
   const adminNav = [
     { name: 'Dashboard', path: '/admin/dashboard', icon: LayoutDashboard },
@@ -36,6 +72,7 @@ const Sidebar = ({ isOpen, onClose }) => {
     { name: 'Announcements', path: '/admin/announcements', icon: Megaphone },
     { name: 'Direct Messages', path: '/admin/messages', icon: MessageSquare },
     { name: 'Audit Logs', path: '/admin/audit-logs', icon: ShieldAlert },
+    { name: 'Subscription & Chapa', path: '/admin/billing', icon: CreditCard },
     { name: 'System Settings', path: '/admin/settings', icon: Settings },
   ];
 
@@ -62,6 +99,25 @@ const Sidebar = ({ isOpen, onClose }) => {
 
   const superadminNav = [
     { name: 'Platform Overview', path: '/superadmin/dashboard', icon: LayoutDashboard },
+    {
+      name: 'More Components',
+      path: '/superadmin/more',
+      icon: Sliders,
+      subItems: [
+        { name: 'License Renewal Plans', path: '/superadmin/more?tab=plans', icon: Zap },
+        { name: 'Receiving Bank Accounts', path: '/superadmin/more?tab=banks', icon: Landmark },
+      ],
+    },
+    {
+      name: 'Actions',
+      path: '/superadmin/actions',
+      icon: ShieldAlert,
+      subItems: [
+        { name: 'Rule Violations & Deletion', path: '/superadmin/actions?tab=schools', icon: ShieldAlert },
+        { name: 'System & Data Cleanup', path: '/superadmin/actions?tab=cleanup', icon: Trash2 },
+        { name: 'Disciplinary Audit Logs', path: '/superadmin/actions?tab=logs', icon: History },
+      ],
+    },
   ];
 
   let currentNav = [];
@@ -101,27 +157,87 @@ const Sidebar = ({ isOpen, onClose }) => {
         <div className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
           {currentNav.map((item) => {
             const Icon = item.icon;
+            const isMoreItem = item.path === '/superadmin/more';
+            const isActionsItem = item.path === '/superadmin/actions';
+            const isItemExpanded = isMoreItem ? moreExpanded : isActionsItem ? actionsExpanded : false;
+
             return (
-              <NavLink
-                key={item.path}
-                to={item.path}
-                onClick={onClose}
-                className={({ isActive }) => {
-                  const hasTab = item.path.includes('?tab=');
-                  const currentSearch = typeof window !== 'undefined' ? window.location.search : '';
-                  const active = hasTab
-                    ? currentSearch.includes('tab=GRADE8_DOCS')
-                    : isActive && !currentSearch.includes('tab=GRADE8_DOCS');
-                  return `flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                    active
-                      ? 'bg-primary-50 text-primary-600 dark:bg-primary-950/60 dark:text-primary-400 font-semibold shadow-sm'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800/60'
-                  }`;
-                }}
-              >
-                <Icon className="w-5 h-5 shrink-0" />
-                <span>{item.name}</span>
-              </NavLink>
+              <div key={item.path} className="space-y-1">
+                <NavLink
+                  to={item.path}
+                  onClick={() => {
+                    if (isMoreItem) {
+                      setMoreExpanded((prev) => (isMoreRoute ? !prev : true));
+                    } else if (isActionsItem) {
+                      setActionsExpanded((prev) => (isActionsRoute ? !prev : true));
+                    }
+                    onClose();
+                  }}
+                  className={({ isActive }) => {
+                    const hasTab = item.path.includes('?tab=');
+                    const active = hasTab
+                      ? location.search.includes('tab=GRADE8_DOCS')
+                      : isMoreItem
+                      ? isMoreRoute
+                      : isActionsItem
+                      ? isActionsRoute
+                      : isActive && !location.search.includes('tab=GRADE8_DOCS');
+                    return `flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                      active
+                        ? 'bg-primary-50 text-primary-600 dark:bg-primary-950/60 dark:text-primary-400 font-semibold shadow-sm'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800/60'
+                    }`;
+                  }}
+                >
+                  <div className="flex items-center gap-3 truncate">
+                    <Icon className="w-5 h-5 shrink-0" />
+                    <span className="truncate">{item.name}</span>
+                  </div>
+                  {isPendingPayment && item.path === '/admin/billing' && (
+                    <span className="px-1.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-rose-500 text-white animate-pulse shrink-0">
+                      Pay Now
+                    </span>
+                  )}
+                  {isPendingPayment && item.path !== '/admin/billing' && item.path !== '/admin/dashboard' && (
+                    <Lock className="w-3.5 h-3.5 text-amber-500/80 shrink-0" />
+                  )}
+                  {item.subItems && (
+                    <ChevronDown
+                      className={`w-4 h-4 text-slate-400 transition-transform duration-200 shrink-0 ${
+                        isItemExpanded ? 'rotate-180 text-primary-600 dark:text-primary-400' : ''
+                      }`}
+                    />
+                  )}
+                </NavLink>
+
+                {/* Sub Items: NOT SEEN before clicking; ONLY SEEN after clicking */}
+                {item.subItems && isItemExpanded && (
+                  <div className="ml-5 pl-2.5 border-l-2 border-slate-200 dark:border-slate-800/80 space-y-1 py-1 animate-in fade-in slide-in-from-top-1 duration-150">
+                    {item.subItems.map((sub) => {
+                      const SubIcon = sub.icon;
+                      const subTab = sub.path.split('tab=')[1];
+                      const isSubActive =
+                        (isMoreItem && isMoreRoute && location.search.includes(`tab=${subTab}`)) ||
+                        (isActionsItem && isActionsRoute && location.search.includes(`tab=${subTab}`));
+                      return (
+                        <NavLink
+                          key={sub.path}
+                          to={sub.path}
+                          onClick={onClose}
+                          className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                            isSubActive
+                              ? 'bg-primary-100/90 text-primary-700 dark:bg-primary-950/80 dark:text-primary-300 font-bold'
+                              : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                          }`}
+                        >
+                          <SubIcon className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate">{sub.name}</span>
+                        </NavLink>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             );
           })}
         </div>

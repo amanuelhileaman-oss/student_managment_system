@@ -328,15 +328,6 @@ const AcademicManagement = () => {
               Active high school subjects taught across Grades 9–12. Newly created subjects become available for teacher assignments, timetable schedules, and grade books immediately.
             </p>
           </div>
-
-          <button
-            type="button"
-            onClick={openAddSubjectModal}
-            className="self-start md:self-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary-50 dark:bg-primary-950/60 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/60 text-xs font-bold border border-primary-200 dark:border-primary-800 transition-colors"
-          >
-            <PlusCircle className="w-3.5 h-3.5" />
-            Add Other Subject
-          </button>
         </div>
 
         {/* Grade Breakdown Stat Pills */}
@@ -432,19 +423,13 @@ const AcademicManagement = () => {
           <div className="p-8 text-center bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-700">
             <BookOpen className="w-10 h-10 text-slate-400 mx-auto mb-2 opacity-60" />
             <h3 className="text-sm font-bold text-slate-700 dark:text-slate-300">
-              No subjects found matching your filters
+              {subjects.length === 0 ? 'No curriculum subjects created yet' : 'No subjects found matching your filters'}
             </h3>
             <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-              Try adjusting your search query or grade filter, or click below to add a new subject to the curriculum.
+              {subjects.length === 0
+                ? "Use the 'Add Other Subject' button in the top right to start defining your school's curriculum."
+                : 'Try adjusting your search query or grade level filter to view subjects.'}
             </p>
-            <button
-              type="button"
-              onClick={openAddSubjectModal}
-              className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-primary-600 hover:bg-primary-700 text-white text-xs font-bold shadow-sm transition-colors"
-            >
-              <PlusCircle className="w-4 h-4" />
-              Add Other Subject
-            </button>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">

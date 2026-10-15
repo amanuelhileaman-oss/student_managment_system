@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
 import Alert from '../../components/common/Alert';
-import LoadingSpinner from '../../components/common/LoadingSpinner';
 import {
   User,
   Shield,
@@ -11,14 +10,17 @@ import {
   Camera,
   Phone,
   Mail,
-  MapPin,
   Lock,
+  Key,
   CheckCircle2,
-  Calendar,
+  AlertTriangle,
   Sparkles,
-  Layers,
   Save,
   RefreshCw,
+  Eye,
+  EyeOff,
+  Sliders,
+  Check,
 } from 'lucide-react';
 
 const PRESET_AVATARS = [
@@ -31,9 +33,27 @@ const PRESET_AVATARS = [
 ];
 
 const ProfilePage = () => {
-  const { user, refreshUser } = useAuth();
+  const { user, refreshUser, updateUserSession } = useAuth();
 
-  const [formData, setFormData] = useState({
+  // Active view tab: 'all' | 'email' | 'password' | 'personal'
+  const [activeTab, setActiveTab] = useState('all');
+
+  // Email form state
+  const [emailForm, setEmailForm] = useState({
+    newEmail: '',
+  });
+
+  // Password form state
+  const [passwordForm, setPasswordForm] = useState({
+    currentPassword: '',
+    newPassword: '',
+    confirmPassword: '',
+  });
+  const [showCurrentPass, setShowCurrentPass] = useState(false);
+  const [showNewPass, setShowNewPass] = useState(false);
+
+  // Profile form state
+  const [profileForm, setProfileForm] = useState({
     firstName: '',
     lastName: '',
     phone: '',
@@ -46,20 +66,22 @@ const ProfilePage = () => {
     address: '',
     guardianName: '',
     guardianPhone: '',
-    // Security fields
-    currentPassword: '',
-    newPassword: '',
-    confirmPassword: '',
   });
 
-  const [saving, setSaving] = useState(false);
+  // Loading & Feedback states
+  const [savingEmail, setSavingEmail] = useState(false);
+  const [savingPassword, setSavingPassword] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [showAvatarPicker, setShowAvatarPicker] = useState(false);
 
   useEffect(() => {
     if (user) {
-      setFormData({
+      setEmailForm({
+        newEmail: user.email || '',
+      });
+      setProfileForm({
         firstName: user.firstName || '',
         lastName: user.lastName || '',
         phone: user.phone || user.teacher?.phone || user.student?.phone || '',
@@ -70,9 +92,6 @@ const ProfilePage = () => {
         address: user.student?.address || '',
         guardianName: user.student?.guardian_name || '',
         guardianPhone: user.student?.guardian_phone || '',
-        currentPassword: '',
-        newPassword: '',
-        confirmPassword: '',
       });
     }
   }, [user]);
@@ -81,7 +100,6 @@ const ProfilePage = () => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Validate size (max 3MB for avatar)
     if (file.size > 3 * 1024 * 1024) {
       setErrorMsg('Image file size must be less than 3MB.');
       return;
@@ -89,80 +107,150 @@ const ProfilePage = () => {
 
     const reader = new FileReader();
     reader.onload = () => {
-      setFormData((prev) => ({ ...prev, avatarUrl: reader.result }));
+      setProfileForm((prev) => ({ ...prev, avatarUrl: reader.result }));
     };
     reader.readAsDataURL(file);
   };
 
-  const handleSubmit = async (e) => {
+  // 1. UPDATE EMAIL INDEPENDENTLY (No password change required)
+  const handleUpdateEmail = async (e) => {
     e.preventDefault();
     setErrorMsg('');
     setSuccessMsg('');
 
-    if (!formData.firstName.trim() || !formData.lastName.trim()) {
+    const targetEmail = emailForm.newEmail.trim().toLowerCase();
+    if (!targetEmail) {
+      setErrorMsg('Please enter a valid email address.');
+      return;
+    }
+    if (targetEmail === (user?.email || '').toLowerCase()) {
+      setErrorMsg('This is already your current email address.');
+      return;
+    }
+
+    setSavingEmail(true);
+    try {
+      const res = await api.put('/auth/profile', {
+        email: targetEmail,
+      });
+
+      if (res.data?.success) {
+        setSuccessMsg(`Email address successfully updated to "${targetEmail}"! Your password and profile remain unchanged.`);
+        if (updateUserSession) {
+          updateUserSession(res.data.user, res.data.token);
+        } else if (refreshUser) {
+          await refreshUser();
+        }
+      }
+    } catch (err) {
+      setErrorMsg(err.response?.data?.message || 'Failed to update email address.');
+    } finally {
+      setSavingEmail(false);
+    }
+  };
+
+  // 2. UPDATE PASSWORD INDEPENDENTLY (No email change required)
+  const handleUpdatePassword = async (e) => {
+    e.preventDefault();
+    setErrorMsg('');
+    setSuccessMsg('');
+
+    if (!passwordForm.currentPassword) {
+      setErrorMsg('Current password is required to change your password.');
+      return;
+    }
+    if (!passwordForm.newPassword) {
+      setErrorMsg('Please enter a new password.');
+      return;
+    }
+    if (passwordForm.newPassword.length < 6) {
+      setErrorMsg('New password must be at least 6 characters long.');
+      return;
+    }
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      setErrorMsg('New password and confirmation do not match.');
+      return;
+    }
+
+    setSavingPassword(true);
+    try {
+      const res = await api.put('/auth/profile', {
+        currentPassword: passwordForm.currentPassword,
+        newPassword: passwordForm.newPassword,
+      });
+
+      if (res.data?.success) {
+        setSuccessMsg('Password changed successfully! Your email address remains unchanged.');
+        setPasswordForm({
+          currentPassword: '',
+          newPassword: '',
+          confirmPassword: '',
+        });
+        if (res.data.token && updateUserSession) {
+          updateUserSession(res.data.user, res.data.token);
+        }
+      }
+    } catch (err) {
+      setErrorMsg(err.response?.data?.message || 'Failed to change password.');
+    } finally {
+      setSavingPassword(false);
+    }
+  };
+
+  // 3. UPDATE PERSONAL PROFILE DETAILS INDEPENDENTLY (No email or password change required)
+  const handleUpdateProfile = async (e) => {
+    e.preventDefault();
+    setErrorMsg('');
+    setSuccessMsg('');
+
+    const isStudent = user?.role === 'student';
+    if (!isStudent && (!profileForm.firstName.trim() || !profileForm.lastName.trim())) {
       setErrorMsg('First name and last name are required.');
       return;
     }
 
-    if (formData.newPassword) {
-      if (!formData.currentPassword) {
-        setErrorMsg('Please enter your current password to set a new password.');
-        return;
-      }
-      if (formData.newPassword !== formData.confirmPassword) {
-        setErrorMsg('New password and confirmation do not match.');
-        return;
-      }
-      if (formData.newPassword.length < 6) {
-        setErrorMsg('New password must be at least 6 characters long.');
-        return;
-      }
-    }
-
-    setSaving(true);
+    setSavingProfile(true);
     try {
-      const payload = user?.role === 'student'
-        ? { avatarUrl: formData.avatarUrl, bio: formData.bio }
-        : {
-            firstName: formData.firstName,
-            lastName: formData.lastName,
-            phone: formData.phone,
-            bio: formData.bio,
-            avatarUrl: formData.avatarUrl,
-            qualification: formData.qualification,
-            specialization: formData.specialization,
-            address: formData.address,
-            guardianName: formData.guardianName,
-            guardianPhone: formData.guardianPhone,
-            currentPassword: formData.currentPassword || undefined,
-            newPassword: formData.newPassword || undefined,
-          };
+      const res = await api.put('/auth/profile', {
+        firstName: profileForm.firstName,
+        lastName: profileForm.lastName,
+        phone: profileForm.phone,
+        bio: profileForm.bio,
+        avatarUrl: profileForm.avatarUrl,
+        qualification: profileForm.qualification,
+        specialization: profileForm.specialization,
+        address: profileForm.address,
+        guardianName: profileForm.guardianName,
+        guardianPhone: profileForm.guardianPhone,
+      });
 
-      const res = await api.put('/auth/profile', payload);
-
-      setSuccessMsg(res.data?.message || 'Profile updated successfully!');
-      // Clear password fields
-      setFormData((prev) => ({
-        ...prev,
-        currentPassword: '',
-        newPassword: '',
-        confirmPassword: '',
-      }));
-      // Refresh AuthContext user state across entire app
-      await refreshUser();
+      if (res.data?.success) {
+        setSuccessMsg('Profile details updated successfully! Your email and password remain unchanged.');
+        if (updateUserSession) {
+          updateUserSession(res.data.user, res.data.token);
+        } else if (refreshUser) {
+          await refreshUser();
+        }
+      }
     } catch (err) {
-      setErrorMsg(err.response?.data?.message || 'Failed to update profile.');
+      setErrorMsg(err.response?.data?.message || 'Failed to update profile details.');
     } finally {
-      setSaving(false);
+      setSavingProfile(false);
     }
   };
 
   const roleConfig = {
-    admin: {
-      label: 'System Administrator',
+    superadmin: {
+      label: 'Platform Super Administrator',
       icon: Shield,
       style: 'bg-purple-100 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 border-purple-200 dark:border-purple-800',
-      tagline: 'Primary Administrative Overseer & School Database Controller',
+      tagline: 'Global Multi-Tenant Platform Controller & Master Administrator',
+    },
+    admin: {
+      label: 'School Administrator',
+      icon: Shield,
+      style: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800',
+      tagline: 'Primary Administrative Overseer & School Tenant Controller',
     },
     teacher: {
       label: 'Academic Faculty Member',
@@ -174,20 +262,21 @@ const ProfilePage = () => {
       label: 'Enrolled High School Student',
       icon: Award,
       style: 'bg-blue-100 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border-blue-200 dark:border-blue-800',
-      tagline: `Grade ${user?.student?.current_grade_level || 'N/A'} • Section ${user?.student?.section_name || 'General'} • ID: ${user?.student?.student_id || 'STU'}`,
+      tagline: `Grade ${user?.student?.current_grade_level || user?.currentGradeLevel || '9'} • Section ${user?.student?.section_name || user?.sectionName || 'General'} • ID: ${user?.student?.student_id || user?.studentId || 'STU'}`,
     },
   };
 
   const currentRole = roleConfig[user?.role] || roleConfig.student;
   const RoleIcon = currentRole.icon;
+  const isStudent = user?.role === 'student';
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6 pb-12">
+    <div className="max-w-4xl mx-auto space-y-6 pb-16">
       {/* Notifications */}
       {successMsg && (
         <Alert
           type="success"
-          title="Profile Updated"
+          title="Account Updated"
           message={successMsg}
           onClose={() => setSuccessMsg('')}
         />
@@ -201,16 +290,16 @@ const ProfilePage = () => {
         />
       )}
 
-      {/* Profile Header Hero Card */}
-      <div className="p-6 sm:p-8 rounded-3xl bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 text-white shadow-lg relative overflow-hidden">
+      {/* Hero Header Card */}
+      <div className="p-6 sm:p-8 rounded-3xl bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 text-white shadow-xl relative overflow-hidden">
         <div className="relative z-10 flex flex-col sm:flex-row items-center sm:items-start gap-6">
-          {/* Avatar with change button */}
-          <div className="relative group">
-            <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-3xl bg-gradient-to-tr from-primary-600 to-indigo-500 p-1 shadow-xl">
-              <div className="w-full h-full rounded-2xl bg-slate-800 overflow-hidden flex items-center justify-center font-extrabold text-3xl text-white">
-                {formData.avatarUrl ? (
+          {/* Avatar with custom trigger */}
+          <div className="relative group shrink-0">
+            <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-3xl bg-gradient-to-tr from-purple-600 to-indigo-500 p-1 shadow-2xl">
+              <div className="w-full h-full rounded-2xl bg-slate-800 overflow-hidden flex items-center justify-center font-black text-3xl text-white">
+                {profileForm.avatarUrl ? (
                   <img
-                    src={formData.avatarUrl}
+                    src={profileForm.avatarUrl}
                     alt={user?.firstName}
                     className="w-full h-full object-cover"
                   />
@@ -222,56 +311,57 @@ const ProfilePage = () => {
             <button
               type="button"
               onClick={() => setShowAvatarPicker(!showAvatarPicker)}
-              className="absolute -bottom-2 -right-2 p-2 rounded-xl bg-primary-600 hover:bg-primary-700 text-white shadow-md transition-all active:scale-95"
+              className="absolute -bottom-2 -right-2 p-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white shadow-md transition-all active:scale-95"
               title="Update profile picture"
             >
               <Camera className="w-4 h-4" />
             </button>
           </div>
 
-          {/* User Info Header */}
-          <div className="text-center sm:text-left flex-1">
-            <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 mb-1.5">
+          {/* User Information */}
+          <div className="text-center sm:text-left flex-1 min-w-0">
+            <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 mb-2">
               <span
-                className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border inline-flex items-center gap-1 ${currentRole.style}`}
+                className={`text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-0.5 rounded-full border inline-flex items-center gap-1.5 ${currentRole.style}`}
               >
-                <RoleIcon className="w-3 h-3" />
+                <RoleIcon className="w-3.5 h-3.5" />
                 <span>{currentRole.label}</span>
               </span>
-              <span className="text-[11px] text-slate-300 font-mono">
+              <span className="text-xs text-purple-200 font-mono bg-white/10 px-2.5 py-0.5 rounded-full">
                 {user?.email}
               </span>
             </div>
 
-            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
+            <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-white">
               {user?.firstName} {user?.lastName}
             </h1>
             <p className="text-xs sm:text-sm text-slate-300 mt-1 max-w-xl">
               {currentRole.tagline}
             </p>
 
-            {formData.bio && (
-              <p className="text-xs text-slate-300/80 italic mt-2 max-w-xl">
-                "{formData.bio}"
+            {profileForm.bio && (
+              <p className="text-xs text-slate-300/90 italic mt-2 max-w-xl">
+                "{profileForm.bio}"
               </p>
             )}
           </div>
         </div>
 
         {/* Decorative background glow */}
-        <div className="absolute top-0 right-0 -mr-16 -mt-16 w-64 h-64 bg-primary-500/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute top-0 right-0 -mr-16 -mt-16 w-64 h-64 bg-purple-500/15 rounded-full blur-3xl pointer-events-none" />
       </div>
 
-      {/* Avatar Picker Modal/Drawer if open */}
+      {/* Avatar Picker Modal */}
       {showAvatarPicker && (
         <div className="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4 animate-in fade-in slide-in-from-top-2">
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                Choose Profile Picture
+              <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                <Camera className="w-4 h-4 text-purple-600" />
+                <span>Choose Profile Picture</span>
               </h3>
               <p className="text-xs text-slate-500">
-                Select from our official high school avatars or upload your own photo
+                Select from our high school avatars or upload your custom photo
               </p>
             </div>
             <button
@@ -289,12 +379,12 @@ const ProfilePage = () => {
                 key={idx}
                 type="button"
                 onClick={() => {
-                  setFormData((prev) => ({ ...prev, avatarUrl: url }));
+                  setProfileForm((prev) => ({ ...prev, avatarUrl: url }));
                   setShowAvatarPicker(false);
                 }}
                 className={`w-16 h-16 rounded-2xl overflow-hidden border-2 transition-all hover:scale-105 ${
-                  formData.avatarUrl === url
-                    ? 'border-primary-600 ring-2 ring-primary-500/30'
+                  profileForm.avatarUrl === url
+                    ? 'border-purple-600 ring-2 ring-purple-500/30'
                     : 'border-slate-200 dark:border-slate-700'
                 }`}
               >
@@ -306,7 +396,7 @@ const ProfilePage = () => {
           <div className="pt-2 flex flex-col sm:flex-row items-center gap-3">
             <label className="w-full sm:w-auto px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold cursor-pointer transition-colors text-center inline-flex items-center justify-center gap-1.5">
               <Camera className="w-4 h-4" />
-              <span>Upload Custom Photo from Device</span>
+              <span>Upload Custom Photo</span>
               <input
                 type="file"
                 accept="image/*"
@@ -314,11 +404,11 @@ const ProfilePage = () => {
                 className="hidden"
               />
             </label>
-            {formData.avatarUrl && (
+            {profileForm.avatarUrl && (
               <button
                 type="button"
                 onClick={() => {
-                  setFormData((prev) => ({ ...prev, avatarUrl: '' }));
+                  setProfileForm((prev) => ({ ...prev, avatarUrl: '' }));
                   setShowAvatarPicker(false);
                 }}
                 className="text-xs text-rose-500 hover:underline"
@@ -330,291 +420,425 @@ const ProfilePage = () => {
         </div>
       )}
 
-      {/* Main Form Form Body */}
-      <form onSubmit={handleSubmit} className="space-y-6">
-        {user?.role === 'student' ? (
-          /* Student: Locked Official Records Notice and Details */
-          <div className="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-5">
-            <div className="flex items-center gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
-              <Shield className="w-4 h-4 text-emerald-600" />
-              <h2 className="font-bold text-sm text-slate-900 dark:text-slate-100">
-                Official Student Record (Verified by School Administration)
-              </h2>
-            </div>
+      {/* Navigation Filter Tabs */}
+      <div className="flex flex-wrap items-center gap-2 p-1.5 bg-slate-100 dark:bg-slate-800/80 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+        <button
+          type="button"
+          onClick={() => setActiveTab('all')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all ${
+            activeTab === 'all'
+              ? 'bg-purple-600 text-white shadow-purple-500/25 shadow-md scale-[1.01]'
+              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-white dark:hover:bg-slate-700'
+          }`}
+        >
+          <Sliders className="w-3.5 h-3.5" />
+          <span>All Settings</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('email')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all ${
+            activeTab === 'email'
+              ? 'bg-purple-600 text-white shadow-purple-500/25 shadow-md scale-[1.01]'
+              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-white dark:hover:bg-slate-700'
+          }`}
+        >
+          <Mail className="w-3.5 h-3.5 text-blue-400" />
+          <span>Update Email Alone</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('password')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all ${
+            activeTab === 'password'
+              ? 'bg-purple-600 text-white shadow-purple-500/25 shadow-md scale-[1.01]'
+              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-white dark:hover:bg-slate-700'
+          }`}
+        >
+          <Lock className="w-3.5 h-3.5 text-amber-400" />
+          <span>Change Password Alone</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('personal')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all ${
+            activeTab === 'personal'
+              ? 'bg-purple-600 text-white shadow-purple-500/25 shadow-md scale-[1.01]'
+              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-white dark:hover:bg-slate-700'
+          }`}
+        >
+          <User className="w-3.5 h-3.5 text-emerald-400" />
+          <span>Personal Details</span>
+        </button>
+      </div>
 
-            <div className="p-4 rounded-2xl bg-blue-50/70 dark:bg-blue-950/20 border border-blue-100 dark:border-blue-900/40 flex items-start gap-2.5">
-              <Sparkles className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
-              <p className="text-xs text-blue-800 dark:text-blue-300 leading-relaxed">
-                Official student identity details (Full Name, Student ID, Academic Level, and Section) are verified and managed strictly by the school administration. <strong>Students can update and customize their profile photo above.</strong>
+      {/* ========================================================================= */}
+      {/* SECTION 1: ACCOUNT EMAIL SETTINGS (INDEPENDENT)                           */}
+      {/* ========================================================================= */}
+      {(activeTab === 'all' || activeTab === 'email') && (
+        <div className="p-6 sm:p-7 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
+            <div>
+              <h2 className="font-extrabold text-base text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                <Mail className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                <span>Account Email Address</span>
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Update your sign-in email address independently without altering your password.
               </p>
             </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-              <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-700/60">
-                <span className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider block mb-1">
-                  Full Name
-                </span>
-                <span className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
-                  <Lock className="w-3.5 h-3.5 text-slate-400" />
-                  {user.firstName} {user.lastName}
-                </span>
-              </div>
-
-              <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-700/60">
-                <span className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider block mb-1">
-                  Student ID
-                </span>
-                <span className="text-sm font-mono font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
-                  <Lock className="w-3.5 h-3.5 text-slate-400" />
-                  {user.studentId || user.student?.student_id || 'STU-PROG-001'}
-                </span>
-              </div>
-
-              <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-700/60">
-                <span className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider block mb-1">
-                  Academic Level
-                </span>
-                <span className="text-sm font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
-                  <Lock className="w-3.5 h-3.5 text-slate-400" />
-                  Grade {user.currentGradeLevel || user.student?.current_grade_level || '9'}
-                  {user.sectionName ? ` - Section ${user.sectionName}` : ''}
-                </span>
-              </div>
-
-              <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-700/60">
-                <span className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider block mb-1">
-                  Assigned Stream
-                </span>
-                <span className="text-sm font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-                  <Lock className="w-3.5 h-3.5 text-slate-400" />
-                  {user.streamName || user.student?.stream_name || 'General Stream'}
-                </span>
-              </div>
-
-              <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-700/60 sm:col-span-2">
-                <span className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider block mb-1">
-                  Official Email
-                </span>
-                <span className="text-sm font-mono text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                  <Lock className="w-3.5 h-3.5 text-slate-400" />
-                  {user.email}
-                </span>
-              </div>
-            </div>
-
-            {/* Editable Student Bio */}
-            <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                Student Bio / Personal Statement
-              </label>
-              <textarea
-                rows={3}
-                value={formData.bio}
-                onChange={(e) => setFormData({ ...formData, bio: e.target.value })}
-                placeholder="Share your goals, academic interests, or hobbies..."
-                className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 text-slate-900 dark:text-slate-100 resize-none"
-              />
-            </div>
+            <span className="self-start sm:self-auto inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+              <CheckCircle2 className="w-3.5 h-3.5 text-blue-600" />
+              Independent Email Control
+            </span>
           </div>
-        ) : (
-          /* Non-Student: Teacher / Admin Editable Form */
-          <>
-            {/* Section 1: Personal Details */}
-            <div className="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
-              <div className="flex items-center gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
-                <User className="w-4 h-4 text-primary-600" />
-                <h2 className="font-bold text-sm text-slate-900 dark:text-slate-100">
-                  Personal Information
-                </h2>
+
+          <form onSubmit={handleUpdateEmail} className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Current Active Email (Verified)
+                </label>
+                <div className="relative">
+                  <Mail className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+                  <input
+                    type="email"
+                    disabled
+                    value={user?.email || ''}
+                    className="w-full pl-9 pr-3 py-2.5 bg-slate-100 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-mono font-bold text-slate-600 dark:text-slate-300 cursor-not-allowed"
+                  />
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  New Sign-In Email Address *
+                </label>
+                <div className="relative">
+                  <Mail className="w-4 h-4 absolute left-3 top-3 text-purple-500" />
+                  <input
+                    type="email"
+                    required
+                    placeholder="Enter your new email..."
+                    value={emailForm.newEmail}
+                    onChange={(e) => setEmailForm({ ...emailForm, newEmail: e.target.value })}
+                    className="w-full pl-9 pr-3 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-mono font-bold text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-2 flex items-center justify-between">
+              <p className="text-[11px] text-slate-400">
+                *Does not require password change. Your existing password will remain active.
+              </p>
+              <button
+                type="submit"
+                disabled={savingEmail || emailForm.newEmail.trim().toLowerCase() === (user?.email || '').toLowerCase()}
+                className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-xs font-bold shadow-md shadow-blue-500/20 disabled:opacity-50 transition-all flex items-center gap-1.5"
+              >
+                {savingEmail ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Save className="w-3.5 h-3.5" />
+                )}
+                <span>{savingEmail ? 'Updating Email...' : 'Update Email Address'}</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* SECTION 2: ACCOUNT PASSWORD & SECURITY (INDEPENDENT)                       */}
+      {/* ========================================================================= */}
+      {(activeTab === 'all' || activeTab === 'password') && (
+        <div className="p-6 sm:p-7 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
+            <div>
+              <h2 className="font-extrabold text-base text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                <Lock className="w-5 h-5 text-amber-500" />
+                <span>Account Password &amp; Security</span>
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Change your sign-in password independently without altering your email address.
+              </p>
+            </div>
+            <span className="self-start sm:self-auto inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+              <Key className="w-3.5 h-3.5 text-amber-600" />
+              Independent Password Control
+            </span>
+          </div>
+
+          <form onSubmit={handleUpdatePassword} className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Current Password *
+                </label>
+                <div className="relative">
+                  <input
+                    type={showCurrentPass ? 'text' : 'password'}
+                    required
+                    placeholder="Enter current password"
+                    value={passwordForm.currentPassword}
+                    onChange={(e) => setPasswordForm({ ...passwordForm, currentPassword: e.target.value })}
+                    className="w-full pl-3.5 pr-9 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowCurrentPass(!showCurrentPass)}
+                    className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+                  >
+                    {showCurrentPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  New Password * (Min 6 chars)
+                </label>
+                <div className="relative">
+                  <input
+                    type={showNewPass ? 'text' : 'password'}
+                    required
+                    placeholder="Min 6 characters"
+                    value={passwordForm.newPassword}
+                    onChange={(e) => setPasswordForm({ ...passwordForm, newPassword: e.target.value })}
+                    className="w-full pl-3.5 pr-9 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewPass(!showNewPass)}
+                    className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+                  >
+                    {showNewPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Confirm New Password *
+                </label>
+                <input
+                  type={showNewPass ? 'text' : 'password'}
+                  required
+                  placeholder="Repeat new password"
+                  value={passwordForm.confirmPassword}
+                  onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+            </div>
+
+            <div className="pt-2 flex items-center justify-between">
+              <p className="text-[11px] text-slate-400">
+                *Does not require email change. Your sign-in email address will remain unchanged.
+              </p>
+              <button
+                type="submit"
+                disabled={savingPassword || !passwordForm.currentPassword || !passwordForm.newPassword}
+                className="px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 active:scale-95 text-white text-xs font-bold shadow-md shadow-amber-500/20 disabled:opacity-50 transition-all flex items-center gap-1.5"
+              >
+                {savingPassword ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Key className="w-3.5 h-3.5" />
+                )}
+                <span>{savingPassword ? 'Changing Password...' : 'Update Password'}</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* SECTION 3: PERSONAL INFORMATION & DETAILS                                  */}
+      {/* ========================================================================= */}
+      {(activeTab === 'all' || activeTab === 'personal') && (
+        <div className="p-6 sm:p-7 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
+            <div>
+              <h2 className="font-extrabold text-base text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                <User className="w-5 h-5 text-emerald-600" />
+                <span>Personal Profile Details</span>
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Customize your bio, contact information, and role attributes.
+              </p>
+            </div>
+            <span className="self-start sm:self-auto inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+              <Check className="w-3.5 h-3.5 text-emerald-600" />
+              Role Profile Info
+            </span>
+          </div>
+
+          <form onSubmit={handleUpdateProfile} className="space-y-4">
+            {/* Student Verified Records */}
+            {isStudent && (
+              <div className="space-y-3">
+                <div className="p-4 rounded-2xl bg-blue-50/70 dark:bg-blue-950/20 border border-blue-100 dark:border-blue-900/40 flex items-start gap-2.5">
+                  <Sparkles className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+                  <p className="text-xs text-blue-800 dark:text-blue-300 leading-relaxed">
+                    Official student identity records (Full Name, Student ID, Grade Level, and Section) are verified and managed by school administration. <strong>You can update your Email above, Password above, and your Bio below.</strong>
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-700/60">
+                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">
+                      Student Name
+                    </span>
+                    <span className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1">
+                      <Lock className="w-3 h-3 text-slate-400" />
+                      {user?.firstName} {user?.lastName}
+                    </span>
+                  </div>
+
+                  <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-700/60">
+                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">
+                      Student ID
+                    </span>
+                    <span className="text-xs font-mono font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1">
+                      <Lock className="w-3 h-3 text-slate-400" />
+                      {user?.student?.student_id || user?.studentId || 'N/A'}
+                    </span>
+                  </div>
+
+                  <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-700/60">
+                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">
+                      Academic Level
+                    </span>
+                    <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                      <Lock className="w-3 h-3 text-slate-400" />
+                      Grade {user?.student?.current_grade_level || user?.currentGradeLevel || '9'}
+                    </span>
+                  </div>
+
+                  <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-700/60">
+                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">
+                      Section
+                    </span>
+                    <span className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1">
+                      <Lock className="w-3 h-3 text-slate-400" />
+                      {user?.student?.section_name || user?.sectionName || 'Assigned'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Non-Student Name inputs */}
+            {!isStudent && (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
                     First Name *
                   </label>
                   <input
                     type="text"
                     required
-                    value={formData.firstName}
-                    onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 text-slate-900 dark:text-slate-100"
+                    value={profileForm.firstName}
+                    onChange={(e) => setProfileForm({ ...profileForm, firstName: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
+
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
                     Last Name *
                   </label>
                   <input
                     type="text"
                     required
-                    value={formData.lastName}
-                    onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 text-slate-900 dark:text-slate-100"
+                    value={profileForm.lastName}
+                    onChange={(e) => setProfileForm({ ...profileForm, lastName: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
+
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Official School Email
-                  </label>
-                  <div className="relative">
-                    <Mail className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
-                    <input
-                      type="email"
-                      disabled
-                      value={user?.email || ''}
-                      className="w-full pl-9 pr-3 py-2.5 bg-slate-100 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-500 dark:text-slate-400 cursor-not-allowed"
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
                     Phone Number
                   </label>
                   <div className="relative">
                     <Phone className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
                     <input
                       type="text"
-                      value={formData.phone}
-                      onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                       placeholder="+251-9XX-XXXXXX"
-                      className="w-full pl-9 pr-3 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 text-slate-900 dark:text-slate-100"
+                      value={profileForm.phone}
+                      onChange={(e) => setProfileForm({ ...profileForm, phone: e.target.value })}
+                      className="w-full pl-9 pr-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                   </div>
                 </div>
               </div>
+            )}
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Short Bio / Statement
-                </label>
-                <textarea
-                  rows={2}
-                  value={formData.bio}
-                  onChange={(e) => setFormData({ ...formData, bio: e.target.value })}
-                  placeholder="A brief introduction about your academic goals or teaching philosophy..."
-                  className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 text-slate-900 dark:text-slate-100 resize-none"
-                />
-              </div>
-            </div>
-
-            {/* Section 2: Teacher Specific Attributes */}
+            {/* Teacher Specific Credentials */}
             {user?.role === 'teacher' && (
-              <div className="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
-                <div className="flex items-center gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
-                  <BookOpen className="w-4 h-4 text-emerald-600" />
-                  <h2 className="font-bold text-sm text-slate-900 dark:text-slate-100">
-                    Faculty &amp; Teaching Credentials
-                  </h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Department / Subject Specialization
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Mathematics, Physics, English"
+                    value={profileForm.specialization}
+                    onChange={(e) => setProfileForm({ ...profileForm, specialization: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      Department / Subject Specialization
-                    </label>
-                    <input
-                      type="text"
-                      value={formData.specialization}
-                      onChange={(e) => setFormData({ ...formData, specialization: e.target.value })}
-                      placeholder="e.g. Mathematics, Physics, Chemistry"
-                      className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 text-slate-900 dark:text-slate-100"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      Academic Qualification
-                    </label>
-                    <input
-                      type="text"
-                      value={formData.qualification}
-                      onChange={(e) => setFormData({ ...formData, qualification: e.target.value })}
-                      placeholder="e.g. B.Ed, M.Sc Mathematics, Ph.D."
-                      className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 text-slate-900 dark:text-slate-100"
-                    />
-                  </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Academic Qualification
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. B.Ed, M.Sc Mathematics"
+                    value={profileForm.qualification}
+                    onChange={(e) => setProfileForm({ ...profileForm, qualification: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
                 </div>
               </div>
             )}
 
-            {/* Section 3: Security & Password Update */}
-            <div className="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
-              <div className="flex items-center gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
-                <Lock className="w-4 h-4 text-amber-600" />
-                <div>
-                  <h2 className="font-bold text-sm text-slate-900 dark:text-slate-100">
-                    Security &amp; Password
-                  </h2>
-                  <p className="text-[11px] text-slate-400">
-                    Leave blank if you do not wish to change your password
-                  </p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Current Password
-                  </label>
-                  <input
-                    type="password"
-                    value={formData.currentPassword}
-                    onChange={(e) => setFormData({ ...formData, currentPassword: e.target.value })}
-                    placeholder="••••••••"
-                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 text-slate-900 dark:text-slate-100"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    New Password
-                  </label>
-                  <input
-                    type="password"
-                    value={formData.newPassword}
-                    onChange={(e) => setFormData({ ...formData, newPassword: e.target.value })}
-                    placeholder="Min 6 characters"
-                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 text-slate-900 dark:text-slate-100"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Confirm New Password
-                  </label>
-                  <input
-                    type="password"
-                    value={formData.confirmPassword}
-                    onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
-                    placeholder="Repeat new password"
-                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 text-slate-900 dark:text-slate-100"
-                  />
-                </div>
-              </div>
+            {/* Editable Bio */}
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Bio / Personal Statement
+              </label>
+              <textarea
+                rows={3}
+                placeholder="Share your goals, academic interests, or teaching philosophy..."
+                value={profileForm.bio}
+                onChange={(e) => setProfileForm({ ...profileForm, bio: e.target.value })}
+                className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none"
+              />
             </div>
-          </>
-        )}
 
-        {/* Action Buttons */}
-        <div className="flex items-center justify-end gap-3 pt-2">
-          <button
-            type="submit"
-            disabled={saving}
-            className="px-6 py-3 rounded-2xl bg-primary-600 hover:bg-primary-700 active:scale-95 text-white font-bold text-sm shadow-md transition-all flex items-center gap-2 disabled:opacity-50"
-          >
-            {saving ? (
-              <RefreshCw className="w-4 h-4 animate-spin" />
-            ) : (
-              <Save className="w-4 h-4" />
-            )}
-            <span>
-              {saving
-                ? 'Saving...'
-                : user?.role === 'student'
-                ? 'Save Profile (Photo & Bio)'
-                : 'Save Profile Changes'}
-            </span>
-          </button>
+            <div className="pt-2 flex items-center justify-end">
+              <button
+                type="submit"
+                disabled={savingProfile}
+                className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs font-bold shadow-md shadow-emerald-500/20 disabled:opacity-50 transition-all flex items-center gap-1.5"
+              >
+                {savingProfile ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Save className="w-3.5 h-3.5" />
+                )}
+                <span>{savingProfile ? 'Saving Details...' : 'Save Profile Details'}</span>
+              </button>
+            </div>
+          </form>
         </div>
-      </form>
+      )}
     </div>
   );
 };

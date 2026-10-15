@@ -2,10 +2,13 @@ const { query } = require('../config/db');
 
 /**
  * Retrieve audit logs with filtering and pagination
+ * Strictly scoped to the authenticated school admin's school_id (Superadmin can view all)
  */
 const getAuditLogs = async (req, res, next) => {
   try {
     const { action, entityType, limit = 50, offset = 0 } = req.query;
+    const isSuperAdmin = req.user?.role === 'superadmin';
+    const schoolId = req.user?.school_id;
 
     let sql = `
       SELECT al.*, u.email, u.role, u.first_name, u.last_name
@@ -14,6 +17,19 @@ const getAuditLogs = async (req, res, next) => {
       WHERE 1=1
     `;
     const params = [];
+
+    // Strictly isolate by school_id for school admins
+    if (!isSuperAdmin) {
+      if (schoolId) {
+        params.push(schoolId);
+        sql += ` AND al.school_id = $${params.length}`;
+      } else {
+        sql += ` AND 1=0`; // No school context, return empty
+      }
+    } else if (req.query.schoolId) {
+      params.push(parseInt(req.query.schoolId, 10));
+      sql += ` AND al.school_id = $${params.length}`;
+    }
 
     if (action) {
       params.push(action);
@@ -24,11 +40,39 @@ const getAuditLogs = async (req, res, next) => {
       sql += ` AND al.entity_type = $${params.length}`;
     }
 
+    // Build matching count query
+    let countSql = `
+      SELECT COUNT(*)
+      FROM audit_logs al
+      LEFT JOIN users u ON al.user_id = u.id
+      WHERE 1=1
+    `;
+    const countParams = [];
+    if (!isSuperAdmin) {
+      if (schoolId) {
+        countParams.push(schoolId);
+        countSql += ` AND al.school_id = $${countParams.length}`;
+      } else {
+        countSql += ` AND 1=0`;
+      }
+    } else if (req.query.schoolId) {
+      countParams.push(parseInt(req.query.schoolId, 10));
+      countSql += ` AND al.school_id = $${countParams.length}`;
+    }
+    if (action) {
+      countParams.push(action);
+      countSql += ` AND al.action = $${countParams.length}`;
+    }
+    if (entityType) {
+      countParams.push(entityType);
+      countSql += ` AND al.entity_type = $${countParams.length}`;
+    }
+
     sql += ` ORDER BY al.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
     params.push(parseInt(limit, 10), parseInt(offset, 10));
 
     const result = await query(sql, params);
-    const countRes = await query('SELECT COUNT(*) FROM audit_logs');
+    const countRes = await query(countSql, countParams);
 
     res.json({
       success: true,
@@ -41,12 +85,14 @@ const getAuditLogs = async (req, res, next) => {
 };
 
 /**
- * Update an audit log record
+ * Update an audit log record (tenant protected)
  */
 const updateAuditLog = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { action, entityType, entityId, details } = req.body;
+    const isSuperAdmin = req.user?.role === 'superadmin';
+    const schoolId = req.user?.school_id;
 
     const checkRes = await query('SELECT * FROM audit_logs WHERE id = $1', [id]);
     if (checkRes.rows.length === 0) {
@@ -54,6 +100,10 @@ const updateAuditLog = async (req, res, next) => {
     }
 
     const current = checkRes.rows[0];
+    if (!isSuperAdmin && current.school_id && schoolId && current.school_id !== schoolId) {
+      return res.status(403).json({ success: false, message: "Unauthorized to modify another school's audit log." });
+    }
+
     const newAction = action || current.action;
     const newEntityType = entityType !== undefined ? entityType : current.entity_type;
     const newEntityId = entityId !== undefined ? entityId : current.entity_id;
@@ -81,14 +131,22 @@ const updateAuditLog = async (req, res, next) => {
 };
 
 /**
- * Delete a specific audit log record
+ * Delete a specific audit log record (tenant protected)
  */
 const deleteAuditLog = async (req, res, next) => {
   try {
     const { id } = req.params;
+    const isSuperAdmin = req.user?.role === 'superadmin';
+    const schoolId = req.user?.school_id;
+
     const checkRes = await query('SELECT * FROM audit_logs WHERE id = $1', [id]);
     if (checkRes.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Audit log record not found.' });
+    }
+
+    const log = checkRes.rows[0];
+    if (!isSuperAdmin && log.school_id && schoolId && log.school_id !== schoolId) {
+      return res.status(403).json({ success: false, message: "Unauthorized to delete another school's audit log." });
     }
 
     await query('DELETE FROM audit_logs WHERE id = $1', [id]);
@@ -103,10 +161,25 @@ const deleteAuditLog = async (req, res, next) => {
 };
 
 /**
- * Clear all audit logs
+ * Clear all audit logs for the authenticated school
  */
 const clearAuditLogs = async (req, res, next) => {
   try {
+    const isSuperAdmin = req.user?.role === 'superadmin';
+    const schoolId = req.user?.school_id;
+
+    if (!isSuperAdmin) {
+      if (!schoolId) {
+        return res.status(403).json({ success: false, message: 'Invalid school context.' });
+      }
+      const delRes = await query('DELETE FROM audit_logs WHERE school_id = $1', [schoolId]);
+      return res.json({
+        success: true,
+        message: `Audit logs for your school have been cleared (${delRes.rowCount} records removed).`,
+      });
+    }
+
+    // Super admin can clear all
     await query('DELETE FROM audit_logs');
     res.json({
       success: true,

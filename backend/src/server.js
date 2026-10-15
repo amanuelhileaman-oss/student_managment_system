@@ -13,6 +13,7 @@ const communicationRoutes = require('./routes/communicationRoutes');
 const auditRoutes = require('./routes/auditRoutes');
 const searchRoutes = require('./routes/searchRoutes');
 const superAdminRoutes = require('./routes/superAdminRoutes');
+const subscriptionRoutes = require('./routes/subscriptionRoutes');
 const errorHandler = require('./middleware/errorHandler');
 
 const app = express();
@@ -106,6 +107,7 @@ app.use('/api/communications', communicationRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/search', searchRoutes);
 app.use('/api/superadmin', superAdminRoutes);
+app.use('/api/subscriptions', subscriptionRoutes);
 
 // Error Handling Middleware
 app.use(errorHandler);
