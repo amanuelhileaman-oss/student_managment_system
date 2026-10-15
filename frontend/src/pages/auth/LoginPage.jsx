@@ -106,19 +106,20 @@ const LoginPage = () => {
   return (
     <div className="min-h-screen relative overflow-hidden bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col justify-between transition-colors duration-500">
       
-      {/* Dynamic Animated Ambient Background Orbs */}
-      <div className="absolute inset-0 pointer-events-none overflow-hidden">
-        {/* Glowing Orb 1 - Top Left */}
-        <div className="absolute -top-32 -left-32 w-[520px] h-[520px] rounded-full bg-gradient-to-tr from-blue-600/25 via-indigo-600/20 to-purple-600/10 blur-[130px] animate-pulse-slow" />
-        
-        {/* Glowing Orb 2 - Bottom Right */}
-        <div className="absolute -bottom-40 -right-40 w-[580px] h-[580px] rounded-full bg-gradient-to-br from-indigo-600/20 via-cyan-500/20 to-blue-600/15 blur-[140px] animate-pulse-slow" />
-        
-        {/* Glowing Orb 3 - Center Ambient Drift */}
-        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 w-[420px] h-[420px] rounded-full bg-purple-500/10 blur-[120px] animate-float" />
-        
+      {/* Professional Students Campus Simulation Background Layer - Bold, Crisp & Vivid */}
+      <div className="absolute inset-0 pointer-events-none overflow-hidden select-none z-0">
+        <img
+          src="/students_simulation_campus.jpg"
+          alt="Professional Students Academic Simulation Campus"
+          className="w-full h-full object-cover object-center opacity-85 dark:opacity-85 filter brightness-95 contrast-110 saturate-105"
+        />
+
+        {/* Clean Vignette Overlays that Keep the Image Bold & Clear */}
+        <div className="absolute inset-0 bg-gradient-to-r from-slate-950/80 via-slate-950/35 to-slate-950/75" />
+        <div className="absolute inset-0 bg-gradient-to-b from-slate-950/60 via-transparent to-slate-950/80" />
+
         {/* Subtle Geometric Dot Grid Pattern */}
-        <div className="absolute inset-0 bg-grid-pattern opacity-80 dark:opacity-60 [mask-image:radial-gradient(ellipse_at_center,transparent_15%,black_75%)]" />
+        <div className="absolute inset-0 bg-grid-pattern opacity-20" />
       </div>
 
       {/* Top Floating Glass Navigation Bar */}
@@ -148,64 +149,64 @@ const LoginPage = () => {
         <div className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-center">
           
           {/* Left Column: SaaS Branding Showcase & Visual Feature Highlights (Hidden on small mobile, visible lg+) */}
-          <div className="hidden lg:flex lg:col-span-6 flex-col justify-center space-y-7 pr-4 animate-fadeIn">
-            <div>
-              <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full text-xs font-semibold bg-primary-500/10 dark:bg-primary-400/10 border border-primary-500/25 text-primary-600 dark:text-primary-400 mb-4 backdrop-blur-sm">
+          <div className="hidden lg:flex lg:col-span-6 flex-col justify-center space-y-6 pr-4 animate-fadeIn">
+            <div className="p-6 sm:p-7 rounded-3xl bg-slate-900/65 dark:bg-slate-950/70 backdrop-blur-xl border border-white/10 shadow-2xl space-y-4">
+              <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full text-xs font-semibold bg-primary-500/20 text-primary-300 border border-primary-500/40 backdrop-blur-sm">
                 <Sparkles className="w-3.5 h-3.5" />
                 <span>Next-Gen High School Management</span>
               </div>
               
-              <h1 className="text-4xl xl:text-5xl font-black tracking-tight leading-[1.15] text-slate-900 dark:text-white">
+              <h1 className="text-4xl xl:text-5xl font-black tracking-tight leading-[1.15] text-white drop-shadow-md">
                 Empowering Ethiopian High Schools with{' '}
-                <span className="bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 dark:from-blue-400 dark:via-indigo-300 dark:to-purple-300 bg-clip-text text-transparent">
+                <span className="bg-gradient-to-r from-blue-400 via-indigo-300 to-purple-300 bg-clip-text text-transparent">
                   Intelligent Cloud Systems.
                 </span>
               </h1>
               
-              <p className="mt-4 text-base text-slate-600 dark:text-slate-400 leading-relaxed max-w-lg">
+              <p className="text-base text-slate-200 leading-relaxed max-w-lg drop-shadow-sm">
                 A unified multi-tenant academic platform connecting School Principals, Teachers, Students, and Regional Directors through real-time gradebooks, automated admissions, and secure portals.
               </p>
             </div>
 
             {/* Three Glassmorphic Floating Feature Cards */}
             <div className="space-y-3 max-w-lg">
-              <div className="group p-3.5 rounded-2xl bg-white/60 dark:bg-slate-900/50 backdrop-blur-md border border-slate-200/70 dark:border-slate-800/80 hover:border-primary-500/40 shadow-sm hover:shadow-md transition-all duration-300 flex items-start gap-3.5">
-                <div className="p-2.5 rounded-xl bg-blue-500/10 dark:bg-blue-400/10 text-blue-600 dark:text-blue-400 shrink-0 group-hover:scale-105 transition-transform">
+              <div className="group p-3.5 rounded-2xl bg-slate-900/70 dark:bg-slate-950/75 backdrop-blur-xl border border-white/10 hover:border-primary-500/50 shadow-xl transition-all duration-300 flex items-start gap-3.5">
+                <div className="p-2.5 rounded-xl bg-blue-500/20 text-blue-400 shrink-0 group-hover:scale-105 transition-transform">
                   <Building2 className="w-5 h-5" />
                 </div>
                 <div>
-                  <h2 className="text-sm font-bold text-slate-800 dark:text-slate-200">
+                  <h2 className="text-sm font-bold text-white">
                     Multi-School Federation
                   </h2>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  <p className="text-xs text-slate-300 mt-0.5">
                     Isolated databases and customized academic years for every registered high school.
                   </p>
                 </div>
               </div>
 
-              <div className="group p-3.5 rounded-2xl bg-white/60 dark:bg-slate-900/50 backdrop-blur-md border border-slate-200/70 dark:border-slate-800/80 hover:border-indigo-500/40 shadow-sm hover:shadow-md transition-all duration-300 flex items-start gap-3.5">
-                <div className="p-2.5 rounded-xl bg-indigo-500/10 dark:bg-indigo-400/10 text-indigo-600 dark:text-indigo-400 shrink-0 group-hover:scale-105 transition-transform">
+              <div className="group p-3.5 rounded-2xl bg-slate-900/70 dark:bg-slate-950/75 backdrop-blur-xl border border-white/10 hover:border-indigo-500/50 shadow-xl transition-all duration-300 flex items-start gap-3.5">
+                <div className="p-2.5 rounded-xl bg-indigo-500/20 text-indigo-400 shrink-0 group-hover:scale-105 transition-transform">
                   <TrendingUp className="w-5 h-5" />
                 </div>
                 <div>
-                  <h2 className="text-sm font-bold text-slate-800 dark:text-slate-200">
+                  <h2 className="text-sm font-bold text-white">
                     Automated Grading & Transcripts
                   </h2>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  <p className="text-xs text-slate-300 mt-0.5">
                     Real-time assessment calculation, rank distribution, and one-click report card exports.
                   </p>
                 </div>
               </div>
 
-              <div className="group p-3.5 rounded-2xl bg-white/60 dark:bg-slate-900/50 backdrop-blur-md border border-slate-200/70 dark:border-slate-800/80 hover:border-violet-500/40 shadow-sm hover:shadow-md transition-all duration-300 flex items-start gap-3.5">
-                <div className="p-2.5 rounded-xl bg-violet-500/10 dark:bg-violet-400/10 text-violet-600 dark:text-violet-400 shrink-0 group-hover:scale-105 transition-transform">
+              <div className="group p-3.5 rounded-2xl bg-slate-900/70 dark:bg-slate-950/75 backdrop-blur-xl border border-white/10 hover:border-violet-500/50 shadow-xl transition-all duration-300 flex items-start gap-3.5">
+                <div className="p-2.5 rounded-xl bg-violet-500/20 text-violet-400 shrink-0 group-hover:scale-105 transition-transform">
                   <ShieldCheck className="w-5 h-5" />
                 </div>
                 <div>
-                  <h2 className="text-sm font-bold text-slate-800 dark:text-slate-200">
+                  <h2 className="text-sm font-bold text-white">
                     Zero-Friction Role Routing
                   </h2>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  <p className="text-xs text-slate-300 mt-0.5">
                     Single universal login automatically discovers your school and directs you to your authorized dashboard.
                   </p>
                 </div>
@@ -213,20 +214,20 @@ const LoginPage = () => {
             </div>
 
             {/* Platform Stats Counter */}
-            <div className="pt-2 flex items-center gap-8 border-t border-slate-200/60 dark:border-slate-800/70 max-w-lg">
+            <div className="pt-2 flex items-center gap-8 border-t border-white/15 max-w-lg">
               <div>
-                <p className="text-2xl font-black text-slate-900 dark:text-white">100%</p>
-                <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Cloud Native</p>
+                <p className="text-2xl font-black text-white drop-shadow-sm">100%</p>
+                <p className="text-[11px] font-medium text-slate-300 uppercase tracking-wider">Cloud Native</p>
               </div>
-              <div className="h-8 w-px bg-slate-200 dark:bg-slate-800" />
+              <div className="h-8 w-px bg-white/20" />
               <div>
-                <p className="text-2xl font-black text-slate-900 dark:text-white">Role-Based</p>
-                <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Automated SSO</p>
+                <p className="text-2xl font-black text-white drop-shadow-sm">Role-Based</p>
+                <p className="text-[11px] font-medium text-slate-300 uppercase tracking-wider">Automated SSO</p>
               </div>
-              <div className="h-8 w-px bg-slate-200 dark:bg-slate-800" />
+              <div className="h-8 w-px bg-white/20" />
               <div>
-                <p className="text-2xl font-black text-emerald-600 dark:text-emerald-400">Secure</p>
-                <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Multi-Tenant</p>
+                <p className="text-2xl font-black text-emerald-400 drop-shadow-sm">Secure</p>
+                <p className="text-[11px] font-medium text-slate-300 uppercase tracking-wider">Multi-Tenant</p>
               </div>
             </div>
           </div>

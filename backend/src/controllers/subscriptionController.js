@@ -186,7 +186,7 @@ const initiateSubscriptionPayment = async (req, res, next) => {
       phone: school.phone || undefined,
       txRef,
       returnUrl: (() => {
-        const base = customReturnUrl || process.env.CHAPA_RETURN_URL;
+        const base = customReturnUrl || process.env.CHAPA_RETURN_URL || 'https://student-managment-system-mocha-eight.vercel.app/admin/billing/success';
         const sep = base.includes('?') ? '&' : '?';
         return `${base}${sep}tx_ref=${txRef}`;
       })(),
